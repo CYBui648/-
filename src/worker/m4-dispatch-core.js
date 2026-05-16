@@ -8,6 +8,27 @@ const GZ = {
     hourlyPvShape: [0,0,0,0,0,0, 0.05, 0.2, 0.5, 0.8, 1.0, 0.95, 0.8, 0.5, 0.2, 0.05, 0,0,0,0,0,0,0,0]
   };
 
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const MONTH_NAMES = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+const TICKS_PER_DAY = 96;
+const DAYS_PER_YEAR = 365;
+const TICKS_PER_YEAR = DAYS_PER_YEAR * TICKS_PER_DAY;
+
+function getMonthIndexByDay(dayOfYear) {
+  let remain = dayOfYear;
+  for (let m = 0; m < MONTH_DAYS.length; m++) {
+    if (remain < MONTH_DAYS[m]) return m;
+    remain -= MONTH_DAYS[m];
+  }
+  return 11;
+}
+
+function getMonthStartDay(monthIndex) {
+  let start = 0;
+  for (let m = 0; m < monthIndex; m++) start += MONTH_DAYS[m];
+  return start;
+}
+
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
@@ -214,6 +235,247 @@ function generateAlignedMonthlyLedger(p, seed) {
     }
     return ledger.sort((a, b) => a.arriveTick - b.arriveTick);
   }
+
+function generateAlignedAnnualLedger(p, seed) {
+    const random = seededRandom(seed || 20260513);
+    const randomRange = (min, max) => min + random() * (max - min);
+    const randNormalLocal = (mean, stdDev) => {
+      const u = 1 - random(), v = random();
+      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v) * stdDev + mean;
+    };
+    const totalDays = DAYS_PER_YEAR;
+    const fixedRatio = clamp(Number.isFinite(p.teacherRatio) ? p.teacherRatio : 0.8, 0, 1);
+    const anxietyRatio = Number.isFinite(p.anxietyRatio) ? p.anxietyRatio : 0.2;
+    const targetSocMean = Number.isFinite(p.targetSocMean) ? p.targetSocMean : 0.95;
+    const fixedFleetCount = Math.round(p.evCount * fixedRatio);
+    const baseVisitorCount = Math.max(0, p.evCount - fixedFleetCount);
+    const fixedFleet = [];
+    const ledger = [];
+    let id = 0;
+
+    for (let i = 0; i < fixedFleetCount; i++) {
+      const capacity = randomRange(60, 100);
+      const consumption = randomRange(10, 20);
+      const meanDailyKm = randomRange(10, 60);
+      const chargeThreshold = randomRange(0.10, 0.40);
+      const targetSocBase = clamp(randNormalLocal(targetSocMean, 0.05), 0.80, 1.00);
+      const dailyEnergy = meanDailyKm * consumption / 100;
+      fixedFleet.push({
+        id: i, capacity, consumption, meanDailyKm, chargeThreshold,
+        targetSocBase, dailyEnergy,
+        soc: clamp(randomRange(chargeThreshold, targetSocBase), 0.08, 1.00)
+      });
+    }
+
+    const pushEvent = (ev) => {
+      if (ev.energyNeed <= 0) return;
+      const dwellTicks = Math.max(1, ev.leaveTick - ev.arriveTick);
+      const minChargeTicks = Math.ceil(ev.energyNeed / (Math.max(1, ev.power) * 0.25));
+      const usefulWaitTicks = Math.max(1, dwellTicks - minChargeTicks);
+      const maxWaitTicks = ev.type === 'Teacher'
+        ? (ev.isAnxious ? Math.max(8, Math.floor(usefulWaitTicks * 0.5)) : usefulWaitTicks)
+        : (ev.isAnxious ? Math.max(4, Math.min(8, usefulWaitTicks)) : Math.max(4, Math.min(12, usefulWaitTicks)));
+      ledger.push({
+        ...ev,
+        id: ev.id || `D${ev.day + 1}_EV${++id}`,
+        preferredTag: ev.tag,
+        chargeReadyTick: ev.arriveTick,
+        deliveredEnergy: 0,
+        waitTicks: 0,
+        maxWaitTicks,
+        status: 'PENDING'
+      });
+    };
+
+    for (let day = 0; day < totalDays; day++) {
+      const isWeekend = day % 7 === 5 || day % 7 === 6;
+      const monthIndex = getMonthIndexByDay(day);
+      const monthlyOccupancy = p.climate?.monthlyOccupancy?.[monthIndex] ?? 1;
+      const dayFactor = clamp(
+        (isWeekend ? (p.holidayRatio || 0.1) : 1) * monthlyOccupancy,
+        0,
+        1
+      );
+      const dayStart = day * TICKS_PER_DAY;
+
+      fixedFleet.forEach(car => {
+        if (random() > dayFactor) return;
+        car.soc = clamp(car.soc - (car.dailyEnergy / car.capacity), 0.03, 1.00);
+        if (car.soc > car.chargeThreshold) return;
+        const targetSoc = clamp(randNormalLocal(car.targetSocBase, 0.035), 0.80, 1.00);
+        const energyNeed = Math.max(car.dailyEnergy, car.capacity * Math.max(0, targetSoc - car.soc));
+        const arriveHour = clamp(randNormalLocal(8.4, 0.55), 7, 10);
+        const dwellHours = clamp(randNormalLocal(8.5, 0.75), 6, 10);
+        const arriveTick = dayStart + clamp(Math.floor(arriveHour * 4), 0, TICKS_PER_DAY - 1);
+        const leaveTick = Math.min((day + 1) * TICKS_PER_DAY, arriveTick + Math.max(2, Math.ceil(dwellHours * 4)));
+        const isAnxious = random() < anxietyRatio;
+        const mustFast = energyNeed / 7 > Math.max(0.5, dwellHours);
+        const tag = (mustFast || (isAnxious && random() < 0.35)) ? 'FAST' : 'SLOW';
+        pushEvent({
+          id: `F${car.id}_D${day + 1}`,
+          day,
+          type: 'Teacher',
+          tag,
+          mustFast,
+          arriveTick,
+          leaveTick,
+          energyNeed,
+          power: tag === 'FAST' ? 30 : 7,
+          isAnxious,
+          initSoc: car.soc,
+          targetSoc,
+          car,
+          socWrittenBack: false
+        });
+        // SOC 回写移至车辆实际离场时按交付结果执行
+      });
+
+      const visitorCountToday = Math.round(baseVisitorCount * dayFactor);
+      for (let i = 0; i < visitorCountToday; i++) {
+        const capacity = randomRange(50, 95);
+        const initSoc = randomRange(0.20, 0.70);
+        const targetSoc = clamp(randNormalLocal(0.78, 0.08), 0.60, 0.92);
+        const arriveHour = clamp(randNormalLocal(random() < 0.55 ? 10.8 : 14.5, 1.15), 8.5, 17);
+        const dwellHours = clamp(randNormalLocal(2.4, 0.9), 0.75, 5);
+        const arriveTick = dayStart + clamp(Math.floor(arriveHour * 4), 0, TICKS_PER_DAY - 1);
+        const leaveTick = Math.min((day + 1) * TICKS_PER_DAY, arriveTick + Math.max(2, Math.ceil(dwellHours * 4)));
+        const wantsCharge = initSoc < 0.45 || random() < 0.35;
+        const energyNeed = wantsCharge ? Math.max(0, capacity * (targetSoc - initSoc)) : 0;
+        const mustFast = dwellHours < energyNeed / 7;
+        const tag = (mustFast || random() < 0.55) ? 'FAST' : 'SLOW';
+        pushEvent({
+          day,
+          type: 'Visitor',
+          tag,
+          mustFast,
+          arriveTick,
+          leaveTick,
+          energyNeed,
+          power: tag === 'FAST' ? 30 : 7,
+          isAnxious: true,
+          initSoc,
+          targetSoc
+        });
+      }
+    }
+    return ledger.sort((a, b) => a.arriveTick - b.arriveTick);
+  }
+
+function writeBackFixedCarSoc(ev) {
+  if (!ev?.car || ev.socWrittenBack) return;
+  const delivered = Math.max(0, ev.deliveredEnergy || 0);
+  const capacity = Math.max(1, ev.car.capacity || 1);
+  ev.car.soc = clamp(
+    (ev.initSoc || 0) + delivered / capacity,
+    0.03,
+    ev.targetSoc ?? 1.0
+  );
+  ev.socWrittenBack = true;
+}
+
+function createAnnualDemandState(p, seed) {
+  const random = seededRandom(seed || 20260513);
+  const randomRange = (min, max) => min + random() * (max - min);
+  const randNormalLocal = (mean, stdDev) => {
+    const u = 1 - random(), v = random();
+    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v) * stdDev + mean;
+  };
+  const fixedRatio = clamp(Number.isFinite(p.teacherRatio) ? p.teacherRatio : 0.8, 0, 1);
+  const anxietyRatio = Number.isFinite(p.anxietyRatio) ? p.anxietyRatio : 0.2;
+  const targetSocMean = Number.isFinite(p.targetSocMean) ? p.targetSocMean : 0.95;
+  const fixedFleetCount = Math.round(p.evCount * fixedRatio);
+  const baseVisitorCount = Math.max(0, p.evCount - fixedFleetCount);
+  const fixedFleet = [];
+  let eventId = 0;
+
+  for (let i = 0; i < fixedFleetCount; i++) {
+    const capacity = randomRange(60, 100);
+    const consumption = randomRange(10, 20);
+    const meanDailyKm = randomRange(10, 60);
+    const chargeThreshold = randomRange(0.10, 0.40);
+    const targetSocBase = clamp(randNormalLocal(targetSocMean, 0.05), 0.80, 1.00);
+    const dailyEnergy = meanDailyKm * consumption / 100;
+    fixedFleet.push({
+      id: i, capacity, consumption, meanDailyKm, chargeThreshold,
+      targetSocBase, dailyEnergy,
+      soc: clamp(randomRange(chargeThreshold, targetSocBase), 0.08, 1.00)
+    });
+  }
+
+  function finalizeEvent(ev) {
+    if (ev.energyNeed <= 0) return null;
+    const dwellTicks = Math.max(1, ev.leaveTick - ev.arriveTick);
+    const minChargeTicks = Math.ceil(ev.energyNeed / (Math.max(1, ev.power) * 0.25));
+    const usefulWaitTicks = Math.max(1, dwellTicks - minChargeTicks);
+    const maxWaitTicks = ev.type === 'Teacher'
+      ? (ev.isAnxious ? Math.max(8, Math.floor(usefulWaitTicks * 0.5)) : usefulWaitTicks)
+      : (ev.isAnxious ? Math.max(4, Math.min(8, usefulWaitTicks)) : Math.max(4, Math.min(12, usefulWaitTicks)));
+    return {
+      ...ev,
+      id: ev.id || `D${ev.day + 1}_EV${++eventId}`,
+      preferredTag: ev.tag,
+      chargeReadyTick: ev.arriveTick,
+      deliveredEnergy: 0,
+      waitTicks: 0,
+      maxWaitTicks,
+      status: 'PENDING'
+    };
+  }
+
+  function generateDayEvents(day) {
+    const events = [];
+    const isWeekend = day % 7 === 5 || day % 7 === 6;
+    const monthIndex = getMonthIndexByDay(day);
+    const monthlyOccupancy = p.climate?.monthlyOccupancy?.[monthIndex] ?? 1;
+    const dayFactor = clamp((isWeekend ? (p.holidayRatio || 0.1) : 1) * monthlyOccupancy, 0, 1);
+    const dayStart = day * TICKS_PER_DAY;
+
+    fixedFleet.forEach(car => {
+      if (random() > dayFactor) return;
+      car.soc = clamp(car.soc - car.dailyEnergy / car.capacity, 0.03, 1.00);
+      if (car.soc > car.chargeThreshold) return;
+      const targetSoc = clamp(randNormalLocal(car.targetSocBase, 0.035), 0.80, 1.00);
+      const energyNeed = Math.max(car.dailyEnergy, car.capacity * Math.max(0, targetSoc - car.soc));
+      const arriveHour = clamp(randNormalLocal(8.4, 0.55), 7, 10);
+      const dwellHours = clamp(randNormalLocal(8.5, 0.75), 6, 10);
+      const arriveTick = dayStart + clamp(Math.floor(arriveHour * 4), 0, TICKS_PER_DAY - 1);
+      const leaveTick = Math.min((day + 1) * TICKS_PER_DAY, arriveTick + Math.max(2, Math.ceil(dwellHours * 4)));
+      const isAnxious = random() < anxietyRatio;
+      const mustFast = energyNeed / 7 > Math.max(0.5, dwellHours);
+      const tag = (mustFast || (isAnxious && random() < 0.35)) ? 'FAST' : 'SLOW';
+      const ev = finalizeEvent({
+        id: `F${car.id}_D${day + 1}`, day, type: 'Teacher', tag, mustFast,
+        arriveTick, leaveTick, energyNeed,
+        power: tag === 'FAST' ? 30 : 7, isAnxious,
+        initSoc: car.soc, targetSoc, car, socWrittenBack: false
+      });
+      if (ev) events.push(ev);
+    });
+
+    const visitorCountToday = Math.round(baseVisitorCount * dayFactor);
+    for (let i = 0; i < visitorCountToday; i++) {
+      const capacity = randomRange(50, 95);
+      const initSoc = randomRange(0.20, 0.70);
+      const targetSoc = clamp(randNormalLocal(0.78, 0.08), 0.60, 0.92);
+      const arriveHour = clamp(randNormalLocal(random() < 0.55 ? 10.8 : 14.5, 1.15), 8.5, 17);
+      const dwellHours = clamp(randNormalLocal(2.4, 0.9), 0.75, 5);
+      const arriveTick = dayStart + clamp(Math.floor(arriveHour * 4), 0, TICKS_PER_DAY - 1);
+      const leaveTick = Math.min((day + 1) * TICKS_PER_DAY, arriveTick + Math.max(2, Math.ceil(dwellHours * 4)));
+      const wantsCharge = initSoc < 0.45 || random() < 0.35;
+      const energyNeed = wantsCharge ? Math.max(0, capacity * (targetSoc - initSoc)) : 0;
+      const mustFast = dwellHours < energyNeed / 7;
+      const tag = (mustFast || random() < 0.55) ? 'FAST' : 'SLOW';
+      const ev = finalizeEvent({
+        day, type: 'Visitor', tag, mustFast, arriveTick, leaveTick, energyNeed,
+        power: tag === 'FAST' ? 30 : 7, isAnxious: true, initSoc, targetSoc
+      });
+      if (ev) events.push(ev);
+    }
+    return events.sort((a, b) => a.arriveTick - b.arriveTick);
+  }
+
+  return { fixedFleet, generateDayEvents };
+}
 
 function runFlexibleMatrixDispatch(payload) {
     const p = payload.params;
@@ -469,6 +731,374 @@ function runFlexibleMatrixDispatch(payload) {
     };
   }
 
+function runFlexibleMatrixAnnualDispatch(payload) {
+    const p = payload.params;
+    const cfg = payload.config;
+    const econ = payload.economics;
+    const totalDays = DAYS_PER_YEAR;
+    const totalTicks = TICKS_PER_YEAR;
+    const ledgerSeed = Number.isFinite(p.seed) ? p.seed : 20260513;
+    const demandState = createAnnualDemandState(p, ledgerSeed);
+    const agents = [];
+    let annualEventIndex = 0;
+    let shiftedCount = 0;
+    let delayTicksTotal = 0;
+
+    const prepareFlexibleAnnualEvent = (ev) => {
+      const random = seededRandom(9000 + annualEventIndex++);
+      const minTicks = Math.ceil(ev.energyNeed / (Math.max(1, ev.power) * 0.25));
+      const slackTicks = ev.leaveTick - ev.arriveTick - minTicks;
+      let chargeReadyTick = ev.arriveTick;
+      const localTick = ev.arriveTick % TICKS_PER_DAY;
+      const dayStart = ev.arriveTick - localTick;
+      const priceElasticity = random();
+      let shifted = false;
+      if (p.usePricing && ev.type === 'Teacher' && localTick >= 28 && localTick <= 40 && slackTicks > 32 && priceElasticity > p.priceShiftThreshold) {
+        const targetTick = dayStart + 52 + Math.floor(random() * 12);
+        if (targetTick < ev.leaveTick - minTicks) {
+          chargeReadyTick = targetTick;
+          shifted = true;
+        }
+      }
+      if (shifted) {
+        shiftedCount++;
+        delayTicksTotal += Math.max(0, chargeReadyTick - ev.arriveTick);
+      }
+      return {
+        ...ev,
+        chargeReadyTick,
+        priceElasticity,
+        shifted,
+        maxPower: ev.power,
+        currentPower: 0,
+        v2gBorrowed: 0,
+        clippedTicks: 0,
+        closed: false
+      };
+    };
+
+    // Monthly stats buckets
+    const monthly = MONTH_DAYS.map((days, month) => ({
+      month,
+      monthName: MONTH_NAMES[month],
+      days,
+      realPeak: 0,
+      unmetTotal: 0,
+      overflowCount: 0,
+      socMin: 100,
+      deliveredEnergy: 0,
+      queueUnmet: 0,
+      abandonedCount: 0,
+      curtailmentEnergy: 0,
+      pvGenEnergy: 0,
+      shiftedCount: 0,
+      clippedCount: 0,
+      v2gEnergy: 0,
+      eBuyPeak: 0,
+      eBuyFlat: 0,
+      eBuyValley: 0
+    }));
+    const monthlyClippedSets = MONTH_DAYS.map(() => new Set());
+
+    let soc = cfg.E_storage * 0.2, socMin = 100, realPeak = 0, overflowCount = 0, unmetTotal = 0;
+    let queueUnmet = 0, abandonedCount = 0;
+    let clippedEvSet = new Set(), v2gEvSet = new Set();
+    let v2gEnergy = 0, eBuyValley = 0, eBuyFlat = 0, eBuyPeak = 0, deliveredEnergy = 0, totalPvGen = 0, totalCurtailed = 0;
+    let activePeak = 0, readyPeak = 0;
+    const demandSeries = new Float32Array(totalTicks);
+    const rawDemandSeries = new Float32Array(totalTicks);
+    const activeSeries = new Float32Array(totalTicks);
+    const socSeries = new Float32Array(totalTicks);
+    const pvSeries = new Float32Array(totalTicks);
+    const limitSeries = new Float32Array(totalTicks);
+
+    const nMatrix = p.nMatrix || (cfg.n7 + cfg.n30);
+    const connected = [];
+    const matrixQueue = [];
+
+    for (let tick = 0; tick < totalTicks; tick++) {
+      const dayOfYear = Math.floor(tick / TICKS_PER_DAY);
+      const currentMonth = getMonthIndexByDay(dayOfYear);
+      const monthStat = monthly[currentMonth];
+      const h = Math.floor((tick % TICKS_PER_DAY) / 4);
+      const subTick = tick % 4;
+      const hourDataIdx = Math.floor(tick / 4);
+      const currentIrr = (p.gTiltData && p.gTiltData.length > hourDataIdx) ? parseFloat(p.gTiltData[hourDataIdx]) : (GZ.hourlyPvShape[h] * 1000 * 0.8);
+      const nextIrr = (p.gTiltData && p.gTiltData.length > hourDataIdx + 1) ? parseFloat(p.gTiltData[hourDataIdx + 1]) : (GZ.hourlyPvShape[(h + 1) % 24] * 1000 * 0.8);
+      const irradiance = currentIrr + (nextIrr - currentIrr) * (subTick / 4);
+      const pvPower = cfg.P_pv * (irradiance / 1000) * p.pvEfficiency * GZ.efficiencyDirect;
+      pvSeries[tick] = pvPower;
+      totalPvGen += pvPower * 0.25;
+      monthStat.pvGenEnergy += pvPower * 0.25;
+
+      for (let i = connected.length - 1; i >= 0; i--) {
+        if (connected[i].leaveTick <= tick) connected.splice(i, 1);
+      }
+      for (let i = matrixQueue.length - 1; i >= 0; i--) {
+        if (matrixQueue[i].leaveTick <= tick) {
+          const ev = matrixQueue[i];
+          const gap = Math.max(0, ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0));
+          queueUnmet += gap;
+          unmetTotal += gap;
+          abandonedCount++;
+          monthStat.queueUnmet += gap;
+          monthStat.unmetTotal += gap;
+          monthStat.abandonedCount++;
+          ev.closed = true;
+          writeBackFixedCarSoc(ev);
+          matrixQueue.splice(i, 1);
+        }
+      }
+
+      // Daily dynamic event injection: generate today's events based on real-time car SOC
+      if (tick % TICKS_PER_DAY === 0) {
+        const dayEvents = demandState.generateDayEvents(dayOfYear);
+        const preparedEvents = dayEvents.map((ev) => {
+          const prepared = prepareFlexibleAnnualEvent(ev);
+          if (prepared.shifted) {
+            monthly[currentMonth].shiftedCount++;
+          }
+          return prepared;
+        });
+        agents.push(...preparedEvents);
+      }
+
+      const newArrivals = agents.filter(ev => !ev.closed && !ev._connected && ev.arriveTick <= tick && ev.leaveTick > tick);
+      for (const ev of newArrivals) {
+        if (connected.length < nMatrix) {
+          connected.push(ev);
+          ev._connected = true;
+        } else {
+          matrixQueue.push(ev);
+          ev._connected = true;
+        }
+      }
+
+      while (matrixQueue.length > 0 && connected.length < nMatrix) {
+        const ev = matrixQueue.shift();
+        connected.push(ev);
+      }
+
+      const plugged = connected.filter(ev => ev.leaveTick > tick);
+      const ready = plugged.filter(ev => tick >= ev.chargeReadyTick && ev.deliveredEnergy < ev.energyNeed + (ev.v2gBorrowed || 0) - 0.001);
+      activePeak = Math.max(activePeak, plugged.length + matrixQueue.length);
+      readyPeak = Math.max(readyPeak, ready.length);
+      activeSeries[tick] = plugged.length + matrixQueue.length;
+
+      ready.forEach(ev => {
+        const remainingNeed = ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0);
+        ev.currentPower = Math.min(ev.maxPower, Math.max(0, remainingNeed / 0.25));
+      });
+      let totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+      rawDemandSeries[tick] = totalDemand;
+
+      const softLimit = cfg.transformerLimit * p.clipThreshold;
+      const computeUrgency = (ev) => {
+        const remainingNeed = ev.energyNeed + ev.v2gBorrowed - ev.deliveredEnergy;
+        const remainingTime = Math.max(0.25, ev.leaveTick - tick);
+        return remainingNeed / remainingTime;
+      };
+
+      if (p.useClipping && totalDemand > softLimit) {
+        const flexible = ready
+          .filter(ev => {
+            const remainingNeed = ev.energyNeed + ev.v2gBorrowed - ev.deliveredEnergy;
+            const minRemain = Math.ceil(remainingNeed / (Math.max(3.5, ev.currentPower) * 0.25));
+            return (ev.leaveTick - tick - minRemain) > p.minClipSlackTicks;
+          })
+          .sort((a, b) => computeUrgency(a) - computeUrgency(b));
+        for (const ev of flexible) {
+          if (totalDemand <= softLimit) break;
+          const oldPower = ev.currentPower;
+          ev.currentPower = Math.max(3.5, ev.currentPower * 0.5);
+          totalDemand -= (oldPower - ev.currentPower);
+          ev.clippedTicks++;
+          clippedEvSet.add(ev.id);
+          monthlyClippedSets[currentMonth].add(ev.id);
+        }
+      }
+      if (p.useClipping && totalDemand > cfg.transformerLimit) {
+        const ratio = cfg.transformerLimit / Math.max(totalDemand, 1);
+        ready.forEach(ev => {
+          if (ev.currentPower <= 0) return;
+          ev.currentPower *= ratio;
+          ev.clippedTicks++;
+          clippedEvSet.add(ev.id);
+          monthlyClippedSets[currentMonth].add(ev.id);
+        });
+        totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+      }
+      if (!p.useClipping && totalDemand > cfg.transformerLimit) {
+        overflowCount++;
+        monthStat.overflowCount++;
+      }
+
+      const essAvailableForV2G = Math.min(cfg.P_storage, Math.max(0, soc - cfg.E_storage * 0.05));
+      const deficitPreV2G = Math.max(0, totalDemand - pvPower - essAvailableForV2G);
+      let v2gPower = 0;
+      if (p.useV2G && h >= 17 && h <= 21 && soc < cfg.E_storage * 0.08 && deficitPreV2G > 0) {
+        const donors = plugged
+          .filter(ev => ev.deliveredEnergy >= ev.energyNeed && ev.leaveTick - tick > 12 && ev.v2gBorrowed < p.maxV2gPerEv)
+          .sort((a, b) => (b.leaveTick - tick) - (a.leaveTick - tick));
+        for (const ev of donors) {
+          const drawPower = Math.min(7, (p.maxV2gPerEv - ev.v2gBorrowed) / 0.25);
+          if (drawPower <= 0) continue;
+          ev.v2gBorrowed += drawPower * 0.25;
+          v2gPower += drawPower;
+          v2gEnergy += drawPower * 0.25;
+          monthStat.v2gEnergy += drawPower * 0.25;
+          v2gEvSet.add(ev.id);
+          if (v2gPower >= cfg.transformerLimit * 0.15) break;
+        }
+      }
+
+      const loadEnergy = Math.max(0, totalDemand) * 0.25;
+      const v2gSupportEnergy = v2gPower * 0.25;
+      const standbyLoss = cfg.P_storage * 0.005 * 0.25;
+      let availableEnergy = pvPower * 0.25 + v2gSupportEnergy - standbyLoss;
+      if (availableEnergy < loadEnergy) {
+        const discharge = Math.min(loadEnergy - availableEnergy, cfg.P_storage * 0.25, Math.max(0, soc - cfg.E_storage * 0.05));
+        soc -= discharge;
+        availableEnergy += discharge;
+      }
+      if (availableEnergy < loadEnergy) {
+        const gridNeed = loadEnergy - availableEnergy;
+        const gridBuy = Math.min(gridNeed, cfg.transformerLimit * 0.25);
+        availableEnergy += gridBuy;
+        const touPrice = p.gridTouPrice || GZ.gridTouPrice;
+        const gridPrice = getGridTouPrice(h, touPrice);
+        if (Math.abs(gridPrice - touPrice.valley) < 1e-9) { eBuyValley += gridBuy; monthStat.eBuyValley += gridBuy; }
+        else if (Math.abs(gridPrice - touPrice.flat) < 1e-9) { eBuyFlat += gridBuy; monthStat.eBuyFlat += gridBuy; }
+        else { eBuyPeak += gridBuy; monthStat.eBuyPeak += gridBuy; }
+      }
+      const actualDelivered = Math.max(0, Math.min(loadEnergy, availableEnergy));
+      if (loadEnergy > 0 && actualDelivered > 0) {
+        for (const ev of ready) {
+          if (ev.currentPower <= 0) continue;
+          const share = (ev.currentPower * 0.25 / loadEnergy) * actualDelivered;
+          const before = ev.deliveredEnergy;
+          ev.deliveredEnergy = Math.min(ev.energyNeed + ev.v2gBorrowed, ev.deliveredEnergy + share);
+          const deliveredInc = Math.max(0, ev.deliveredEnergy - before);
+          deliveredEnergy += deliveredInc;
+          monthStat.deliveredEnergy += deliveredInc;
+        }
+      }
+      if (availableEnergy > loadEnergy) {
+        const surplus = availableEnergy - loadEnergy;
+        const charge = Math.min(surplus, cfg.P_storage * 0.25, cfg.E_storage - soc);
+        soc += charge;
+        const curtailed = Math.max(0, surplus - charge);
+        totalCurtailed += curtailed;
+        monthStat.curtailmentEnergy += curtailed;
+      }
+
+      for (const ev of plugged) {
+        if (!ev.closed && ev.leaveTick <= tick + 1) {
+          const gap = Math.max(0, ev.energyNeed + ev.v2gBorrowed - ev.deliveredEnergy);
+          unmetTotal += gap;
+          monthStat.unmetTotal += gap;
+          ev.closed = true;
+          writeBackFixedCarSoc(ev);
+        }
+      }
+      realPeak = Math.max(realPeak, totalDemand);
+      monthStat.realPeak = Math.max(monthStat.realPeak, totalDemand);
+      demandSeries[tick] = totalDemand;
+      limitSeries[tick] = cfg.transformerLimit;
+      const socPct = cfg.E_storage > 0 ? soc / cfg.E_storage * 100 : 0;
+      if (cfg.E_storage > 0) { socMin = Math.min(socMin, socPct); monthStat.socMin = Math.min(monthStat.socMin, socPct); }
+      socSeries[tick] = socPct;
+    }
+
+    agents.forEach(ev => {
+      if (!ev.closed) {
+        const gap = Math.max(0, ev.energyNeed + ev.v2gBorrowed - ev.deliveredEnergy);
+        unmetTotal += gap;
+        const finalMonth = getMonthIndexByDay(
+          Math.min(DAYS_PER_YEAR - 1, Math.floor((ev.leaveTick - 1) / TICKS_PER_DAY))
+        );
+        monthly[finalMonth].unmetTotal += gap;
+        writeBackFixedCarSoc(ev);
+      }
+    });
+
+    // Finalize monthly clipped counts
+    for (let m = 0; m < 12; m++) {
+      monthly[m].clippedCount = monthlyClippedSets[m].size;
+    }
+
+    // Build monthly results
+    const monthlyResults = monthly.map((ms, m) => ({
+      month: m,
+      monthName: ms.monthName,
+      days: ms.days,
+      realPeak: ms.realPeak,
+      unmetTotal: ms.unmetTotal,
+      overflowCount: ms.overflowCount,
+      socMin: ms.socMin,
+      deliveredEnergy: ms.deliveredEnergy,
+      queueUnmet: ms.queueUnmet,
+      abandonedCount: ms.abandonedCount,
+      curtailmentEnergy: ms.curtailmentEnergy,
+      pvGenEnergy: ms.pvGenEnergy,
+      curtailmentRate: ms.pvGenEnergy > 0 ? ms.curtailmentEnergy / ms.pvGenEnergy * 100 : 0,
+      LCOE: 0,
+      shiftedCount: ms.shiftedCount,
+      clippedCount: ms.clippedCount,
+      v2gEnergy: ms.v2gEnergy,
+      eBuyPeak: ms.eBuyPeak,
+      eBuyFlat: ms.eBuyFlat,
+      eBuyValley: ms.eBuyValley
+    }));
+
+    // Build annual summary from monthly results
+    const annualDelivered = monthlyResults.reduce((s, r) => s + r.deliveredEnergy, 0);
+    const annualGridValley = monthlyResults.reduce((s, r) => s + r.eBuyValley, 0);
+    const annualGridFlat = monthlyResults.reduce((s, r) => s + r.eBuyFlat, 0);
+    const annualGridPeak = monthlyResults.reduce((s, r) => s + r.eBuyPeak, 0);
+    const annualGridCost = annualGridValley * (econ.priceGridValley || 0.28) +
+      annualGridFlat * (econ.priceGridFlat || 0.65) +
+      annualGridPeak * (econ.priceGridPeak || 0.85);
+    const annualTotalUnmet = monthlyResults.reduce((s, r) => s + r.unmetTotal, 0);
+    const annualDeliveredTotal = Math.max(1, annualDelivered);
+    const annualOpex = cfg.baseCapexYuan * (econ.opexRate || 0.015);
+    const annualLCOE = annualDeliveredTotal > 0
+      ? ((cfg.baseCapexYuan || 0) / 20 + annualOpex + annualGridCost) / annualDeliveredTotal
+      : 999;
+    const annualDemand = annualDeliveredTotal + annualTotalUnmet;
+
+    const annual = {
+      totalUnmet: annualTotalUnmet,
+      totalQueueUnmet: monthlyResults.reduce((s, r) => s + r.queueUnmet, 0),
+      totalOverflow: monthlyResults.reduce((s, r) => s + r.overflowCount, 0),
+      totalDelivered: annualDeliveredTotal,
+      totalGridBuy: annualGridValley + annualGridFlat + annualGridPeak,
+      totalGridPeak: annualGridPeak,
+      totalGridFlat: annualGridFlat,
+      totalGridValley: annualGridValley,
+      totalV2g: monthlyResults.reduce((s, r) => s + r.v2gEnergy, 0),
+      totalPvGen: monthlyResults.reduce((s, r) => s + r.pvGenEnergy, 0),
+      totalCurtailed: monthlyResults.reduce((s, r) => s + (r.curtailmentEnergy || 0), 0),
+      totalShifted: monthlyResults.reduce((s, r) => s + r.shiftedCount, 0),
+      totalClipped: monthlyResults.reduce((s, r) => s + r.clippedCount, 0),
+      totalAbandoned: monthlyResults.reduce((s, r) => s + r.abandonedCount, 0),
+      totalDemand: annualDemand,
+      serviceRate: annualDemand > 0 ? annualDeliveredTotal / annualDemand : 0,
+      maxPeak: Math.max(...monthlyResults.map(r => r.realPeak), 0),
+      worstSoc: Math.min(...monthlyResults.map(r => r.socMin), 100),
+      worstMonth: monthlyResults.reduce((worst, r, i) => r.socMin < monthlyResults[worst].socMin ? i : worst, 0),
+      monthsWithOverflow: monthlyResults.filter(r => r.overflowCount > 0).length,
+      monthsWithSocRisk: monthlyResults.filter(r => r.socMin < 8).length,
+      monthsFailed: monthlyResults.reduce((arr, r, i) => { if (r.socMin < 8) arr.push(i); return arr; }, []),
+      monthsWarning: monthlyResults.reduce((arr, r, i) => { if (r.overflowCount > 0) arr.push(i); return arr; }, []),
+      annualOpex,
+      annualGridCost,
+      annualLCOE
+    };
+
+    return { monthly: monthlyResults, annual };
+  }
+
 function runTraditionalPileDispatch(payload) {
     const p = payload.params;
     const cfg = payload.config;
@@ -642,126 +1272,322 @@ function runTraditionalPileDispatch(payload) {
     };
   }
 
-function runAnnualValidation(payload) {
-    const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    const preferred = payload.preferred; // 'flex_matrix' or 'traditional_pile'
-    const monthlyResults = [];
-    const annual = {
-      totalUnmet: 0, totalQueueUnmet: 0, totalOverflow: 0,
-      totalDelivered: 0, totalDemand: 0, totalGridBuy: 0, totalGridPeak: 0, totalGridFlat: 0, totalGridValley: 0,
-      totalV2g: 0, totalCurtailed: 0, totalPvGen: 0, totalAbandoned: 0,
-      maxPeak: 0, worstSoc: 100, worstMonth: -1,
-      monthsWithOverflow: 0, monthsWithSocRisk: 0,
-      monthsFailed: [], monthsWarning: [],
-      totalOpex: 0, totalShifted: 0, totalClipped: 0
+function runTraditionalPileAnnualDispatch(payload) {
+    const p = payload.params;
+    const cfg = payload.config;
+    const econ = payload.economics;
+    const totalDays = DAYS_PER_YEAR;
+    const totalTicks = TICKS_PER_YEAR;
+    const ledgerSeed = Number.isFinite(p.seed) ? p.seed : 20260513;
+    const demandState = createAnnualDemandState(p, ledgerSeed);
+    const random = seededRandom(ledgerSeed + 901);
+    const ledger = [];
+    let shiftedCount = 0;
+    let delayTicksTotal = 0;
+
+    const prepareTraditionalAnnualEvent = (ev) => {
+      const minTicks = Math.ceil(ev.energyNeed / (Math.max(1, ev.power) * 0.25));
+      const slackTicks = ev.leaveTick - ev.arriveTick - minTicks;
+      const localTick = ev.arriveTick % TICKS_PER_DAY;
+      const dayStart = ev.arriveTick - localTick;
+      const priceElasticity = random();
+      let chargeReadyTick = ev.arriveTick;
+      let shifted = false;
+      if (p.usePricing && ev.type === 'Teacher' && localTick >= 28 && localTick <= 40 && slackTicks > 16 && priceElasticity > p.priceShiftThreshold) {
+        const targetTick = dayStart + 52 + Math.floor(random() * 12);
+        if (targetTick < ev.leaveTick - minTicks) {
+          chargeReadyTick = targetTick;
+          shifted = true;
+        }
+      }
+      if (shifted) {
+        shiftedCount++;
+        delayTicksTotal += Math.max(0, chargeReadyTick - ev.arriveTick);
+      }
+      return { ...ev, chargeReadyTick, shifted, priceElasticity, closed: false };
     };
 
-    for (let m = 0; m < 12; m++) {
-      const monthPayload = {
-        ...payload,
-        params: {
-          ...payload.params,
-          monthIndex: m,
-          seed: (payload.params.seed || 20260513) + m,
-          dispatchMode: preferred
+    // Monthly stats buckets
+    const monthly = MONTH_DAYS.map((days, month) => ({
+      month,
+      monthName: MONTH_NAMES[month],
+      days,
+      realPeak: 0,
+      unmetTotal: 0,
+      overflowCount: 0,
+      socMin: 100,
+      deliveredEnergy: 0,
+      queueUnmet: 0,
+      abandonedCount: 0,
+      curtailmentEnergy: 0,
+      pvGenEnergy: 0,
+      shiftedCount: 0,
+      clippedCount: 0,
+      v2gEnergy: 0,
+      eBuyPeak: 0,
+      eBuyFlat: 0,
+      eBuyValley: 0
+    }));
+
+    const waitingQueue = [], chargingList = [];
+    let nextPending = 0, queueUnmet = 0, unmetTotal = 0, abandonedCount = 0, deliveredEnergy = 0;
+    let soc = cfg.E_storage * 0.2, socMin = 100, realPeak = 0, overflowCount = 0;
+    let eBuyValley = 0, eBuyFlat = 0, eBuyPeak = 0, totalPvGen = 0, totalCurtailed = 0, queuedPeak = 0, chargingPeak = 0;
+    const demandSeries = new Float32Array(totalTicks);
+    const rawDemandSeries = new Float32Array(totalTicks);
+    const activeSeries = new Float32Array(totalTicks);
+    const socSeries = new Float32Array(totalTicks);
+    const pvSeries = new Float32Array(totalTicks);
+    const limitSeries = new Float32Array(totalTicks);
+
+    for (let tick = 0; tick < totalTicks; tick++) {
+      const dayOfYear = Math.floor(tick / TICKS_PER_DAY);
+      const currentMonth = getMonthIndexByDay(dayOfYear);
+      const monthStat = monthly[currentMonth];
+
+      // 1. Clean chargingList (completed or departed)
+      for (let i = chargingList.length - 1; i >= 0; i--) {
+        const ev = chargingList[i];
+        const done = ev.deliveredEnergy >= ev.energyNeed - 0.001;
+        const mustLeave = tick >= ev.leaveTick;
+        if (done || mustLeave) {
+          chargingList.splice(i, 1);
+          if (mustLeave && !done) {
+            const gap = Math.max(0, ev.energyNeed - ev.deliveredEnergy);
+            unmetTotal += gap;
+            monthStat.unmetTotal += gap;
+          }
+          ev.closed = true;
+          writeBackFixedCarSoc(ev);
         }
-      };
-      const result = preferred === 'flex_matrix'
-        ? runFlexibleMatrixDispatch(monthPayload)
-        : runTraditionalPileDispatch(monthPayload);
-
-      monthlyResults.push({
-        month: m,
-        monthName: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'][m],
-        days: monthDays[m],
-        realPeak: result.realPeak || 0,
-        unmetTotal: result.unmetTotal || 0,
-        overflowCount: result.overflowCount || 0,
-        socMin: result.socMin || 100,
-        deliveredEnergy: result.deliveredEnergy || 0,
-        queueUnmet: result.queueUnmet || 0,
-        abandonedCount: result.abandonedCount || 0,
-        curtailmentRate: result.curtailmentRate || 0,
-        LCOE: result.LCOE || 0,
-        shiftedCount: result.shiftedCount || 0,
-        clippedCount: result.clippedCount || 0,
-        v2gEnergy: result.v2gEnergy || 0,
-        eBuyPeak: result.eBuyPeak || 0,
-        eBuyFlat: result.eBuyFlat || 0,
-        eBuyValley: result.eBuyValley || 0
-      });
-
-      const r = result;
-      annual.totalUnmet += r.unmetTotal || 0;
-      annual.totalQueueUnmet += r.queueUnmet || 0;
-      annual.totalOverflow += r.overflowCount || 0;
-      annual.totalDelivered += r.deliveredEnergy || 0;
-      annual.totalGridBuy += (r.eBuyPeak || 0) + (r.eBuyFlat || 0) + (r.eBuyValley || 0);
-      annual.totalGridPeak += r.eBuyPeak || 0;
-      annual.totalGridFlat += r.eBuyFlat || 0;
-      annual.totalGridValley += r.eBuyValley || 0;
-      annual.totalV2g += r.v2gEnergy || 0;
-      annual.totalCurtailed += monthDays[m] * 24 * (r.curtailmentRate || 0) / 100;
-      annual.totalPvGen += r.chartData?.pv?.reduce((a, b) => a + b, 0) || 0;
-      annual.totalShifted += r.shiftedCount || 0;
-      annual.totalClipped += r.clippedCount || 0;
-      annual.totalAbandoned += r.abandonedCount || 0;
-      annual.totalDemand += (r.deliveredEnergy || 0) + (r.unmetTotal || 0); // demand = delivered + unmet
-      annual.maxPeak = Math.max(annual.maxPeak, r.realPeak || 0);
-      annual.worstSoc = Math.min(annual.worstSoc, r.socMin || 100);
-      if (r.socMin < annual.worstSoc) { annual.worstSoc = r.socMin; annual.worstMonth = m; }
-      if ((r.overflowCount || 0) > 0) {
-        annual.monthsWithOverflow++;
-        annual.monthsWarning.push(m);
       }
-      if ((r.socMin || 100) < 8) {
-        annual.monthsWithSocRisk++;
-        annual.monthsFailed.push(m);
+
+      // 2. Clean waitingQueue (timeout or departed) — moved before daily generation
+      //    so yesterday's abandoned cars have their SOC written back first
+      for (let i = waitingQueue.length - 1; i >= 0; i--) {
+        const ev = waitingQueue[i];
+        ev.waitTicks++;
+        if (tick >= ev.leaveTick || ev.waitTicks > ev.maxWaitTicks) {
+          waitingQueue.splice(i, 1);
+          const gap = Math.max(0, ev.energyNeed);
+          queueUnmet += gap;
+          unmetTotal += gap;
+          abandonedCount++;
+          monthStat.queueUnmet += gap;
+          monthStat.unmetTotal += gap;
+          monthStat.abandonedCount++;
+          writeBackFixedCarSoc(ev);
+        }
       }
-      const monthOpex = (payload.config.baseCapexYuan || 0) * (payload.economics?.opexRate || 0.015) / 12;
-      annual.totalOpex += monthOpex;
+
+      // 3. Daily dynamic event injection — generate today's events based on real-time car SOC
+      if (tick % TICKS_PER_DAY === 0) {
+        const dayEvents = demandState.generateDayEvents(dayOfYear);
+        const preparedEvents = dayEvents
+          .map((ev) => {
+            const prepared = prepareTraditionalAnnualEvent(ev);
+            if (prepared.shifted) {
+              monthly[currentMonth].shiftedCount++;
+            }
+            return prepared;
+          })
+          .sort((a, b) => a.chargeReadyTick - b.chargeReadyTick);
+        ledger.push(...preparedEvents);
+      }
+
+      // 4. Push pending events into waitingQueue
+      while (nextPending < ledger.length && ledger[nextPending].chargeReadyTick <= tick) {
+        const ev = ledger[nextPending++];
+        ev.waitTicks = 0;
+        waitingQueue.push(ev);
+      }
+
+      // 5. Slot assignment
+      let usedFast = chargingList.reduce((s, ev) => s + (ev.tag === 'FAST' ? 1 : 0), 0);
+      let usedSlow = chargingList.length - usedFast;
+      for (let i = 0; i < waitingQueue.length;) {
+        const ev = waitingQueue[i];
+        const fastSlot = ev.tag === 'FAST' && usedFast < cfg.n30;
+        const slowSlot = ev.tag === 'SLOW' && usedSlow < cfg.n7;
+        const slowFallback = ev.tag === 'FAST' && !ev.mustFast && usedSlow < cfg.n7;
+        if (fastSlot || slowSlot || slowFallback) {
+          waitingQueue.splice(i, 1);
+          if (slowFallback && !fastSlot) {
+            ev.tag = 'SLOW';
+            ev.power = 7;
+          }
+          chargingList.push(ev);
+          if (ev.tag === 'FAST') usedFast++; else usedSlow++;
+        } else i++;
+      }
+
+      // 6. Energy supply
+      const h = Math.floor((tick % TICKS_PER_DAY) / 4);
+      const subTick = tick % 4;
+      const hourDataIdx = Math.floor(tick / 4);
+      const currentIrr = (p.gTiltData && p.gTiltData.length > hourDataIdx) ? parseFloat(p.gTiltData[hourDataIdx]) : (GZ.hourlyPvShape[h] * 1000 * 0.8);
+      const nextIrr = (p.gTiltData && p.gTiltData.length > hourDataIdx + 1) ? parseFloat(p.gTiltData[hourDataIdx + 1]) : (GZ.hourlyPvShape[(h + 1) % 24] * 1000 * 0.8);
+      const irradiance = currentIrr + (nextIrr - currentIrr) * (subTick / 4);
+      const pvPower = cfg.P_pv * (irradiance / 1000) * p.pvEfficiency * GZ.efficiencyDirect;
+      const loadPower = chargingList.reduce((s, ev) => s + ev.power, 0);
+      const loadEnergy = loadPower * 0.25;
+      pvSeries[tick] = pvPower;
+      totalPvGen += pvPower * 0.25;
+      monthStat.pvGenEnergy += pvPower * 0.25;
+      rawDemandSeries[tick] = loadPower;
+      realPeak = Math.max(realPeak, loadPower);
+      monthStat.realPeak = Math.max(monthStat.realPeak, loadPower);
+      if (loadPower > cfg.transformerLimit) { overflowCount++; monthStat.overflowCount++; }
+
+      const standbyLoss = cfg.P_storage * 0.005 * 0.25;
+      let availableEnergy = pvPower * 0.25 - standbyLoss;
+      if (availableEnergy < loadEnergy) {
+        const discharge = Math.min(loadEnergy - availableEnergy, cfg.P_storage * 0.25, Math.max(0, soc - cfg.E_storage * 0.05));
+        soc -= discharge;
+        availableEnergy += discharge;
+      }
+      if (availableEnergy < loadEnergy) {
+        const gridNeed = loadEnergy - availableEnergy;
+        const gridBuy = Math.min(gridNeed, cfg.transformerLimit * 0.25);
+        availableEnergy += gridBuy;
+        const touPrice = p.gridTouPrice || GZ.gridTouPrice;
+        const gridPrice = getGridTouPrice(h, touPrice);
+        if (Math.abs(gridPrice - touPrice.valley) < 1e-9) { eBuyValley += gridBuy; monthStat.eBuyValley += gridBuy; }
+        else if (Math.abs(gridPrice - touPrice.flat) < 1e-9) { eBuyFlat += gridBuy; monthStat.eBuyFlat += gridBuy; }
+        else { eBuyPeak += gridBuy; monthStat.eBuyPeak += gridBuy; }
+      }
+      const actualDelivered = Math.max(0, Math.min(loadEnergy, availableEnergy));
+      if (loadEnergy > 0 && actualDelivered > 0) {
+        for (const ev of chargingList) {
+          const share = (ev.power * 0.25 / loadEnergy) * actualDelivered;
+          const before = ev.deliveredEnergy;
+          ev.deliveredEnergy = Math.min(ev.energyNeed, ev.deliveredEnergy + share);
+          const deliveredInc = Math.max(0, ev.deliveredEnergy - before);
+          deliveredEnergy += deliveredInc;
+          monthStat.deliveredEnergy += deliveredInc;
+        }
+      }
+      if (availableEnergy > loadEnergy) {
+        const surplus = availableEnergy - loadEnergy;
+        const charge = Math.min(surplus, cfg.P_storage * 0.25, cfg.E_storage - soc);
+        soc += charge;
+        const curtailed = Math.max(0, surplus - charge);
+        totalCurtailed += curtailed;
+        monthStat.curtailmentEnergy += curtailed;
+      }
+
+      queuedPeak = Math.max(queuedPeak, waitingQueue.length);
+      chargingPeak = Math.max(chargingPeak, chargingList.length);
+      activeSeries[tick] = waitingQueue.length;
+      demandSeries[tick] = Math.min(loadPower, cfg.transformerLimit);
+      limitSeries[tick] = cfg.transformerLimit;
+      const socPct = cfg.E_storage > 0 ? soc / cfg.E_storage * 100 : 0;
+      if (cfg.E_storage > 0) { socMin = Math.min(socMin, socPct); monthStat.socMin = Math.min(monthStat.socMin, socPct); }
+      socSeries[tick] = socPct;
+    }
+    const finalMonth = 11;
+    for (const ev of chargingList) {
+      const gap = Math.max(0, ev.energyNeed - ev.deliveredEnergy);
+      unmetTotal += gap;
+      monthly[finalMonth].unmetTotal += gap;
+      writeBackFixedCarSoc(ev);
+    }
+    for (const ev of waitingQueue) {
+      const gap = Math.max(0, ev.energyNeed);
+      queueUnmet += gap;
+      unmetTotal += gap;
+      abandonedCount++;
+      monthly[finalMonth].queueUnmet += gap;
+      monthly[finalMonth].unmetTotal += gap;
+      monthly[finalMonth].abandonedCount++;
+      writeBackFixedCarSoc(ev);
     }
 
-    const annualDelivered = annual.totalDelivered;
-    const annualGridCost = annual.totalGridValley * (payload.economics?.priceGridValley || 0.28) +
-      annual.totalGridFlat * (payload.economics?.priceGridFlat || 0.65) +
-      annual.totalGridPeak * (payload.economics?.priceGridPeak || 0.85);
-    const annualLCOE = annualDelivered > 0
-      ? ((payload.config.baseCapexYuan || 0) / 20 + annual.totalOpex + annualGridCost) / annualDelivered
-      : 999;
+    // Build monthly results
+    const monthlyResults = monthly.map((ms, m) => ({
+      month: m,
+      monthName: ms.monthName,
+      days: ms.days,
+      realPeak: ms.realPeak,
+      unmetTotal: ms.unmetTotal,
+      overflowCount: ms.overflowCount,
+      socMin: ms.socMin,
+      deliveredEnergy: ms.deliveredEnergy,
+      queueUnmet: ms.queueUnmet,
+      abandonedCount: ms.abandonedCount,
+      curtailmentEnergy: ms.curtailmentEnergy,
+      pvGenEnergy: ms.pvGenEnergy,
+      curtailmentRate: ms.pvGenEnergy > 0 ? ms.curtailmentEnergy / ms.pvGenEnergy * 100 : 0,
+      LCOE: 0,
+      shiftedCount: ms.shiftedCount,
+      clippedCount: ms.clippedCount,
+      v2gEnergy: ms.v2gEnergy,
+      eBuyPeak: ms.eBuyPeak,
+      eBuyFlat: ms.eBuyFlat,
+      eBuyValley: ms.eBuyValley
+    }));
 
-    return {
-      preferred,
-      monthly: monthlyResults,
-      annual: {
-        totalUnmet: annual.totalUnmet,
-        totalQueueUnmet: annual.totalQueueUnmet,
-        totalOverflow: annual.totalOverflow,
-        totalDelivered: annual.totalDelivered,
-        totalGridBuy: annual.totalGridBuy,
-        totalGridPeak: annual.totalGridPeak,
-        totalGridFlat: annual.totalGridFlat,
-        totalGridValley: annual.totalGridValley,
-        totalV2g: annual.totalV2g,
-        totalPvGen: annual.totalPvGen,
-        totalShifted: annual.totalShifted,
-        totalClipped: annual.totalClipped,
-        totalAbandoned: annual.totalAbandoned,
-        totalDemand: annual.totalDemand,
-        serviceRate: annual.totalDemand > 0 ? annual.totalDelivered / annual.totalDemand : 0,
-        maxPeak: annual.maxPeak,
-        worstSoc: annual.worstSoc,
-        worstMonth: annual.worstMonth,
-        monthsWithOverflow: annual.monthsWithOverflow,
-        monthsWithSocRisk: annual.monthsWithSocRisk,
-        monthsFailed: annual.monthsFailed,
-        monthsWarning: annual.monthsWarning,
-        annualOpex: annual.totalOpex,
-        annualGridCost: annualGridCost,
-        annualLCOE: annualLCOE
-      }
+    // Build annual summary from monthly results
+    const annualDelivered = monthlyResults.reduce((s, r) => s + r.deliveredEnergy, 0);
+    const annualGridValley = monthlyResults.reduce((s, r) => s + r.eBuyValley, 0);
+    const annualGridFlat = monthlyResults.reduce((s, r) => s + r.eBuyFlat, 0);
+    const annualGridPeak = monthlyResults.reduce((s, r) => s + r.eBuyPeak, 0);
+    const annualGridCost = annualGridValley * (econ.priceGridValley || 0.28) +
+      annualGridFlat * (econ.priceGridFlat || 0.65) +
+      annualGridPeak * (econ.priceGridPeak || 0.85);
+    const annualTotalUnmet = monthlyResults.reduce((s, r) => s + r.unmetTotal, 0);
+    const annualDeliveredTotal = Math.max(1, annualDelivered);
+    const annualOpex = cfg.baseCapexYuan * (econ.opexRate || 0.015);
+    const annualLCOE = annualDeliveredTotal > 0
+      ? ((cfg.baseCapexYuan || 0) / 20 + annualOpex + annualGridCost) / annualDeliveredTotal
+      : 999;
+    const annualDemand = annualDeliveredTotal + annualTotalUnmet;
+
+    const annual = {
+      totalUnmet: annualTotalUnmet,
+      totalQueueUnmet: monthlyResults.reduce((s, r) => s + r.queueUnmet, 0),
+      totalOverflow: monthlyResults.reduce((s, r) => s + r.overflowCount, 0),
+      totalDelivered: annualDeliveredTotal,
+      totalGridBuy: annualGridValley + annualGridFlat + annualGridPeak,
+      totalGridPeak: annualGridPeak,
+      totalGridFlat: annualGridFlat,
+      totalGridValley: annualGridValley,
+      totalV2g: monthlyResults.reduce((s, r) => s + r.v2gEnergy, 0),
+      totalPvGen: monthlyResults.reduce((s, r) => s + r.pvGenEnergy, 0),
+      totalCurtailed: monthlyResults.reduce((s, r) => s + (r.curtailmentEnergy || 0), 0),
+      totalShifted: monthlyResults.reduce((s, r) => s + r.shiftedCount, 0),
+      totalClipped: monthlyResults.reduce((s, r) => s + r.clippedCount, 0),
+      totalAbandoned: monthlyResults.reduce((s, r) => s + r.abandonedCount, 0),
+      totalDemand: annualDemand,
+      serviceRate: annualDemand > 0 ? annualDeliveredTotal / annualDemand : 0,
+      maxPeak: Math.max(...monthlyResults.map(r => r.realPeak), 0),
+      worstSoc: Math.min(...monthlyResults.map(r => r.socMin), 100),
+      worstMonth: monthlyResults.reduce((worst, r, i) => r.socMin < monthlyResults[worst].socMin ? i : worst, 0),
+      monthsWithOverflow: monthlyResults.filter(r => r.overflowCount > 0).length,
+      monthsWithSocRisk: monthlyResults.filter(r => r.socMin < 8).length,
+      monthsFailed: monthlyResults.reduce((arr, r, i) => { if (r.socMin < 8) arr.push(i); return arr; }, []),
+      monthsWarning: monthlyResults.reduce((arr, r, i) => { if (r.overflowCount > 0) arr.push(i); return arr; }, []),
+      annualOpex,
+      annualGridCost,
+      annualLCOE
     };
+
+    return { monthly: monthlyResults, annual };
   }
+
+function runAnnualValidation(payload) {
+  const preferred = payload.preferred; // 'flex_matrix' or 'traditional_pile'
+
+  const result = preferred === 'flex_matrix'
+    ? runFlexibleMatrixAnnualDispatch(payload)
+    : runTraditionalPileAnnualDispatch(payload);
+
+  return {
+    preferred,
+    monthly: result.monthly,
+    annual: result.annual
+  };
+}
 export {
   clamp,
   percentile,
@@ -769,7 +1595,10 @@ export {
   getGridTouPrice,
   generateMonthlyLedger,
   generateAlignedMonthlyLedger,
+  generateAlignedAnnualLedger,
   runFlexibleMatrixDispatch,
   runTraditionalPileDispatch,
+  runFlexibleMatrixAnnualDispatch,
+  runTraditionalPileAnnualDispatch,
   runAnnualValidation
 };

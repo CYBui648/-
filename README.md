@@ -81,3 +81,13 @@ M1 真实规划
 4. 硬可行性加入全年 SOC 检查：`isM4ScenarioFeasible()` 增加 `monthsWithSocRisk <= 0`；
 5. S3 触发逻辑精修：只在真实接入拥堵时加桩/加矩阵，不再被 `residualUnmet` 误导；
 6. 方案解释增强：S1~S4 的 `intent` 根据风险状态动态生成，新增 `triggerBasis` 字段记录每个方案的触发依据。
+
+
+## V2-4.5 全年无断点连续仿真内核升级
+1. 新增全年工具常量：`MONTH_DAYS` / `TICKS_PER_DAY` / `DAYS_PER_YEAR` / `TICKS_PER_YEAR` / `getMonthIndexByDay()`；
+2. 新增 `generateAlignedAnnualLedger()`：全年 365 天一次性生成充电事件流，固定车队 SOC 跨天继承，接入月份占用率；
+3. 新增 `runFlexibleMatrixAnnualDispatch()`：全年连续柔性调度（35040 tick），储能 SOC / 车队状态跨月连续；
+4. 新增 `runTraditionalPileAnnualDispatch()`：全年连续传统桩站调度，结构与月度版一致；
+5. 重写 `runAnnualValidation()`：不再循环 12 次月仿真，直接调用全年连续调度函数，月度统计从全年运行中切片汇总。
+- 全年仿真保证 TMY 气象 / 储能 SOC / 固定车队 SOC 三者全年连续不间断；
+- 月度调度函数（`runFlexibleMatrixDispatch` / `runTraditionalPileDispatch`）保留用于 M4 压力月复验。

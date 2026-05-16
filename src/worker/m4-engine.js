@@ -121,6 +121,13 @@ function buildBasePayload(context) {
   };
 }
 
+function riskLevel(value, thresholds) {
+  if (!Number.isFinite(value)) return null;
+  if (value <= thresholds[0]) return "low";
+  if (value <= thresholds[1]) return "medium";
+  return "high";
+}
+
 function diagnoseResidualRisk(base) {
   const handoff = base.selectedRoute.handoffToM4 || {};
   const routeResult = base.selectedRoute.result || {};
@@ -131,10 +138,23 @@ function diagnoseResidualRisk(base) {
   const peak = safeNumber(routeResult.realPeakKw, 0);
   const transformerGapKw = Math.max(0, peak - base.config.transformerLimit);
 
-  const serviceRisk = residualQueue > 1 || residualUnmet > 1;
-  const powerRisk = residualOverflow > 0 || transformerGapKw > 1;
-  const energyRisk = residualUnmet > 1;
-  const storageRisk = residualSoc < 8;
+  const serviceActive = residualQueue > 1 || residualUnmet > 1;
+  const powerActive = residualOverflow > 0 || transformerGapKw > 1;
+  const energyActive = residualUnmet > 1;
+  const storageActive = residualSoc < 8;
+
+  const powerLevel = powerActive
+    ? riskLevel(transformerGapKw, [30, 100]) || riskLevel(residualOverflow, [15, 30])
+    : null;
+  const energyLevel = energyActive
+    ? riskLevel(residualUnmet, [60, 200])
+    : null;
+  const serviceLevel = serviceActive
+    ? riskLevel(residualQueue, [30, 100])
+    : null;
+  const storageLevel = storageActive
+    ? (residualSoc >= 5 ? "low" : residualSoc >= 3 ? "medium" : "high")
+    : null;
 
   const severityScore =
     Math.min(35, residualUnmet / 120) +
@@ -149,13 +169,31 @@ function diagnoseResidualRisk(base) {
     residualSocMinPct: round(residualSoc, 1),
     routePeakKw: round(peak, 1),
     transformerGapKw: round(transformerGapKw, 1),
-    serviceRisk,
-    powerRisk,
-    energyRisk,
-    storageRisk,
+    serviceRisk: { active: serviceActive, level: serviceLevel },
+    powerRisk: { active: powerActive, level: powerLevel },
+    energyRisk: { active: energyActive, level: energyLevel },
+    storageRisk: { active: storageActive, level: storageLevel },
     severity: severityScore >= 60 ? "high" : severityScore >= 25 ? "medium" : "low",
     severityScore: round(severityScore, 1)
   };
+}
+
+function applyPowerDeltaByLevel(baseDelta, level) {
+  if (level === "low") return Math.max(0, ceilTo(baseDelta * 0.4, 25));
+  if (level === "high") return Math.max(0, ceilTo(baseDelta * 0.9, 25));
+  return Math.max(0, ceilTo(baseDelta * 0.65, 25)); // medium (default)
+}
+
+function applyEnergyDeltaByLevel(baseDelta, level) {
+  if (level === "low") return Math.max(0, ceilTo(baseDelta * 0.4, 50));
+  if (level === "high") return Math.max(0, ceilTo(baseDelta * 0.9, 50));
+  return Math.max(0, ceilTo(baseDelta * 0.65, 50)); // medium
+}
+
+function applyServiceDeltaByLevel(baseDelta, level) {
+  if (level === "low") return Math.max(1, Math.ceil(baseDelta * 0.35));
+  if (level === "high") return Math.max(1, Math.ceil(baseDelta * 0.9));
+  return Math.max(1, Math.ceil(baseDelta * 0.65)); // medium
 }
 
 function buildScenarioPlans(base, diagnosis) {
@@ -166,17 +204,40 @@ function buildScenarioPlans(base, diagnosis) {
   const residualUnmet = safeNumber(diagnosis.residualUnmetKwh, 0);
   const residualQueue = safeNumber(diagnosis.residualQueueUnmetKwh, 0);
   const transformerGap = safeNumber(diagnosis.transformerGapKw, 0);
+  const powerRisk = diagnosis.powerRisk || {};
+  const energyRisk = diagnosis.energyRisk || {};
+  const serviceRisk = diagnosis.serviceRisk || {};
+  const storageRisk = diagnosis.storageRisk || {};
 
-  const powerDelta = ceilTo(Math.max(transformerGap * 0.9, pcsBase * 0.25, diagnosis.powerRisk ? 25 : 0), 25);
-  const energyDelta = ceilTo(Math.max(residualUnmet * 0.05, essBase * 0.35, diagnosis.storageRisk ? 100 : 0, diagnosis.energyRisk ? 75 : 0), 50);
-  const pvDelta = ceilTo(Math.max(residualUnmet * 0.02, diagnosis.energyRisk ? pvBase * 0.10 : 0), 25);
+  const powerDelta = ceilTo(Math.max(transformerGap * 0.9, pcsBase * 0.25, powerRisk.active ? 25 : 0), 25);
+  const energyDelta = ceilTo(Math.max(residualUnmet * 0.05, essBase * 0.35, storageRisk.active ? 100 : 0, energyRisk.active ? 75 : 0), 50);
+  const pvDelta = ceilTo(Math.max(residualUnmet * 0.02, energyRisk.active ? pvBase * 0.10 : 0), 25);
 
   const pileDelta = Math.max(1, Math.ceil(residualQueue / 600));
   const matrixDelta = Math.max(2, Math.ceil(residualQueue / 900));
 
   const serviceDelta = routeKey === "traditional_pile"
-    ? { deltaN7: pileDelta, deltaN30: diagnosis.serviceRisk ? Math.max(0, Math.ceil(pileDelta / 2)) : 0, deltaMatrix: 0 }
+    ? { deltaN7: pileDelta, deltaN30: serviceRisk.active ? Math.max(0, Math.ceil(pileDelta / 2)) : 0, deltaMatrix: 0 }
     : { deltaN7: 0, deltaN30: 0, deltaMatrix: matrixDelta };
+
+  // S4 deltas adapt to each risk's level instead of using fixed medium multipliers
+  const s4Deltas = { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 };
+
+  if (powerRisk.active && powerRisk.level) {
+    s4Deltas.deltaPcsKw = applyPowerDeltaByLevel(powerDelta, powerRisk.level);
+  }
+  if (energyRisk.active && energyRisk.level) {
+    s4Deltas.deltaStorageKwh = applyEnergyDeltaByLevel(energyDelta, energyRisk.level);
+    s4Deltas.deltaPvKw = applyEnergyDeltaByLevel(pvDelta, energyRisk.level);
+  }
+  if (serviceRisk.active && serviceRisk.level) {
+    if (routeKey === "traditional_pile") {
+      s4Deltas.deltaN7 = applyServiceDeltaByLevel(serviceDelta.deltaN7, serviceRisk.level);
+      s4Deltas.deltaN30 = applyServiceDeltaByLevel(serviceDelta.deltaN30, serviceRisk.level);
+    } else {
+      s4Deltas.deltaMatrix = applyServiceDeltaByLevel(serviceDelta.deltaMatrix, serviceRisk.level);
+    }
+  }
 
   return [
     {
@@ -208,15 +269,8 @@ function buildScenarioPlans(base, diagnosis) {
     {
       id: "S4",
       title: "S4 综合平衡方案",
-      intent: "以中等补量同时处理功率、能量与服务三类短板，追求风险修复与投资代价的综合均衡。",
-      deltas: {
-        deltaPvKw: Math.max(0, ceilTo(pvDelta * 0.6, 25)),
-        deltaStorageKwh: Math.max(0, ceilTo(energyDelta * 0.65, 50)),
-        deltaPcsKw: Math.max(0, ceilTo(powerDelta * 0.65, 25)),
-        deltaN7: routeKey === "traditional_pile" ? Math.max(0, Math.ceil(serviceDelta.deltaN7 * 0.75)) : 0,
-        deltaN30: routeKey === "traditional_pile" ? Math.max(0, Math.ceil(serviceDelta.deltaN30 * 0.75)) : 0,
-        deltaMatrix: routeKey === "flex_matrix" ? Math.max(0, Math.ceil(serviceDelta.deltaMatrix * 0.75)) : 0
-      }
+      intent: "按实际残余风险等级自适应组合功率、能量与服务增量，避免一刀切中档配置。",
+      deltas: s4Deltas
     }
   ];
 }
@@ -411,25 +465,47 @@ function scoreScenarios(evaluated, weightsInput = {}) {
   }).sort((a, b) => b.recommendation.totalScore - a.recommendation.totalScore);
 }
 
+function isM4ScenarioFeasible(scenario) {
+  const v = scenario.annualValidation || {};
+  const m = scenario.stressMonth || {};
+  return (
+    (v.totalOverflowCount || 0) <= 0 &&
+    (v.totalUnmetKwh || 0) <= 1 &&
+    (v.totalQueueUnmetKwh || 0) <= 1 &&
+    (m.socMinPct == null || m.socMinPct >= 8) &&
+    (v.serviceRate == null || v.serviceRate >= 0.99)
+  );
+}
+
 function buildRecommendation(scored) {
-  const recommendation = scored[0] || null;
-  const lowInvestment = [...scored].sort((a, b) =>
+  const feasible = scored.filter((s) => isM4ScenarioFeasible(s));
+  const pool = feasible.length > 0 ? feasible : scored;
+  const isFallback = feasible.length === 0;
+
+  const recommendation = pool[0] || null;
+  const lowInvestment = [...pool].sort((a, b) =>
     safeNumber(a.extraCapexWan, 0) - safeNumber(b.extraCapexWan, 0)
   )[0] || null;
-  const highProtection = [...scored].sort((a, b) => {
+  const highProtection = [...pool].sort((a, b) => {
     const aRisk = safeNumber(a.annualValidation.totalUnmetKwh, 0) + safeNumber(a.annualValidation.totalOverflowCount, 0) * 100;
     const bRisk = safeNumber(b.annualValidation.totalUnmetKwh, 0) + safeNumber(b.annualValidation.totalOverflowCount, 0) * 100;
     return aRisk - bRisk;
   })[0] || null;
+
+  const explanation = recommendation
+    ? (isFallback
+        ? `当前无方案完全满足硬可行性约束，${recommendation.id} 为候选中的相对最优方案。该方案仍存在部分残余风险，建议进一步调整工程边界或扩展方案库。`
+        : `综合推荐 ${recommendation.id}：硬可行方案中综合评分最高，在风险修复、追加投资与运行指标之间取得了当前版本下的最佳平衡。`)
+    : "当前未生成可推荐方案。";
 
   return {
     recommendedScenarioId: recommendation?.id || null,
     recommendedScenarioTitle: recommendation?.title || null,
     lowInvestmentScenarioId: lowInvestment?.id || null,
     highProtectionScenarioId: highProtection?.id || null,
-    explanation: recommendation
-      ? `综合评分最高的是 ${recommendation.id}。它在风险修复、追加投资与运行指标之间取得了当前版本下的最佳平衡。`
-      : "当前未生成可推荐方案。"
+    isFallbackRecommendation: isFallback,
+    feasibleCount: feasible.length,
+    explanation
   };
 }
 

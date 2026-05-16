@@ -289,6 +289,28 @@ function renderM3Summary(state) {
 }
 
 
+function riskLabel(risk) {
+  if (!risk || !risk.active || !risk.level) return "无";
+  const map = { low: "低", medium: "中", high: "高" };
+  return map[risk.level] || risk.level;
+}
+
+function riskDiagnosisText(diagnosis) {
+  const parts = [];
+  const power = diagnosis.powerRisk || {};
+  const energy = diagnosis.energyRisk || {};
+  const service = diagnosis.serviceRisk || {};
+  const storage = diagnosis.storageRisk || {};
+
+  if (power.active) parts.push(`功率:${riskLabel(power)}`);
+  if (energy.active) parts.push(`能量:${riskLabel(energy)}`);
+  if (service.active) parts.push(`服务:${riskLabel(service)}`);
+  if (storage.active) parts.push(`储能:${riskLabel(storage)}`);
+
+  if (!parts.length) return "无显著残余风险";
+  return parts.join(" ");
+}
+
 function renderM4Summary(state) {
   const result = state.stages.m4.result;
   const m3 = state.stages.m3.result;
@@ -332,9 +354,12 @@ function renderM4Summary(state) {
   const recommended = scenarios.find((s) => s.id === recommendation.recommendedScenarioId) || scenarios[0];
 
   el.title.textContent = summary.title || "最终工程方案定型已完成";
-  el.meta.textContent = `${summary.selectedRouteLabel || "--"} · 共评估 ${summary.scenarioCount || scenarios.length} 套方案`;
-  el.residualSeverity.textContent = `${diagnosis.severity || "--"} / ${formatNumber(diagnosis.severityScore || 0, 1)}`;
-  el.recommendMain.textContent = recommendation.recommendedScenarioId || "--";
+  el.meta.textContent = `${summary.selectedRouteLabel || "--"} · 共评估 ${summary.scenarioCount || scenarios.length} 套方案` +
+    (recommendation.feasibleCount != null ? ` · 硬可行 ${recommendation.feasibleCount} 套` : "");
+  el.residualSeverity.textContent = `${diagnosis.severity || "--"} / ${formatNumber(diagnosis.severityScore || 0, 1)} · ${riskDiagnosisText(diagnosis)}`;
+  el.recommendMain.textContent = recommendation.isFallbackRecommendation
+    ? `${recommendation.recommendedScenarioId || "--"} (相对最优)`
+    : recommendation.recommendedScenarioId || "--";
   el.recommendLow.textContent = recommendation.lowInvestmentScenarioId || "--";
   el.recommendSafe.textContent = recommendation.highProtectionScenarioId || "--";
   el.recommendScore.textContent = recommended?.recommendation?.totalScore != null

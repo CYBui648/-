@@ -34,6 +34,122 @@ function formatPercent(value, digits = 1) {
   });
 }
 
+const MONTH_LABELS = [
+  "1月", "2月", "3月", "4月", "5月", "6月",
+  "7月", "8月", "9月", "10月", "11月", "12月"
+];
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function resetAnnualChart(container, emptyText = "暂无数据") {
+  if (!container) return;
+  container.innerHTML = `<div class="annual-chart-empty">${emptyText}</div>`;
+}
+
+function renderAnnualBarChart(container, values, options = {}) {
+  if (!container) return;
+
+  const {
+    maxValue = Math.max(...values, 1),
+    formatter = (v) => String(v),
+    dangerJudge = () => false,
+    inverse = false
+  } = options;
+
+  if (!Array.isArray(values) || values.length === 0) {
+    resetAnnualChart(container);
+    return;
+  }
+
+  container.innerHTML = values.map((value, index) => {
+    const rawRatio = maxValue > 0 ? value / maxValue : 0;
+    const ratio = inverse ? 1 - clamp01(rawRatio) : clamp01(rawRatio);
+    const heightPct = Math.max(6, ratio * 100);
+    const danger = dangerJudge(value, index);
+
+    return `
+      <div class="annual-bar-item ${danger ? "danger" : ""}">
+        <div class="annual-bar-value">${formatter(value)}</div>
+        <div class="annual-bar-track">
+          <div class="annual-bar-fill" style="height:${heightPct}%"></div>
+        </div>
+        <div class="annual-bar-label">${MONTH_LABELS[index] || `${index + 1}月`}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function monthLabel(index) {
+  return MONTH_LABELS[index] || `${index + 1}月`;
+}
+
+function getTopRiskMonths(monthlyUnmet, monthlyService, monthlyOverflow, monthlySoc) {
+  const maxUnmet = Math.max(...monthlyUnmet, 1);
+  const maxOverflow = Math.max(...monthlyOverflow, 1);
+
+  return monthlyUnmet
+    .map((unmet, index) => {
+      const service = monthlyService[index] ?? 1;
+      const overflow = monthlyOverflow[index] ?? 0;
+      const soc = monthlySoc[index] ?? 100;
+
+      const unmetScore = unmet > 0 ? unmet / maxUnmet : 0;
+      const serviceScore = service < 0.95 ? (0.95 - service) / 0.95 : 0;
+      const overflowScore = overflow > 0 ? overflow / maxOverflow : 0;
+      const socScore = soc < 8 ? (8 - soc) / 8 : 0;
+
+      const score =
+        unmetScore * 0.40 +
+        serviceScore * 0.30 +
+        overflowScore * 0.15 +
+        socScore * 0.15;
+
+      return { index, label: monthLabel(index), score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+}
+
+function getAnnualMainRisk(annual) {
+  const totalUnmet = Number(annual?.totalUnmetKwh || 0);
+  const serviceRate = Number(annual?.serviceRate || 0);
+  const overflowMonths = Number(annual?.monthsWithOverflow || 0);
+  const socRiskMonths = Number(annual?.monthsWithSocRisk || 0);
+
+  if (totalUnmet > 0 && serviceRate < 0.95) return "服务缺口偏高";
+  if (socRiskMonths > 0) return "储能韧性不足";
+  if (overflowMonths > 0) return "配电越限仍存在";
+  if (totalUnmet > 0) return "仍有交付缺口";
+  return "无显著年度残余风险";
+}
+
+function getAnnualJudgement(annual) {
+  const totalUnmet = Number(annual?.totalUnmetKwh || 0);
+  const serviceRate = Number(annual?.serviceRate || 0);
+  const overflowMonths = Number(annual?.monthsWithOverflow || 0);
+  const socRiskMonths = Number(annual?.monthsWithSocRisk || 0);
+
+  if (totalUnmet <= 0 && serviceRate >= 0.99 && overflowMonths === 0 && socRiskMonths === 0) {
+    return "全年表现基本稳健";
+  }
+  return "仍需进入 M4 加固";
+}
+
+function getM4FocusText(annual) {
+  const totalUnmet = Number(annual?.totalUnmetKwh || 0);
+  const serviceRate = Number(annual?.serviceRate || 0);
+  const overflowMonths = Number(annual?.monthsWithOverflow || 0);
+  const socRiskMonths = Number(annual?.monthsWithSocRisk || 0);
+
+  if (socRiskMonths > 0 && totalUnmet > 0) return "优先补储能韧性与服务交付";
+  if (overflowMonths > 0) return "优先压降功率越限风险";
+  if (serviceRate < 0.95 || totalUnmet > 0) return "优先修复全年服务缺口";
+  return "重点比较工程代价与稳健性";
+}
+
 function renderTabs(state) {
   dom.stageTabs.forEach((tab) => {
     const stageKey = tab.dataset.stage;
@@ -226,6 +342,19 @@ function renderM3Summary(state) {
     el.annualService.textContent = "--%";
     el.annualOverflowMonths.textContent = "--";
     el.annualSocMonths.textContent = "--";
+
+    el.annualConclusionText.textContent =
+      "完成所选路线全年验证后，这里将自动提炼年度判断与进入 M4 的依据。";
+    el.annualJudgement.textContent = "--";
+    el.annualMainRisk.textContent = "--";
+    el.annualFocusMonths.textContent = "--";
+    el.annualM4Focus.textContent = "--";
+
+    el.annualChartMeta.textContent = "完成所选路线全年验证后，这里将展示 12 个月风险分布。";
+    resetAnnualChart(el.annualUnmetChart);
+    resetAnnualChart(el.annualServiceChart);
+    resetAnnualChart(el.annualOverflowChart);
+    resetAnnualChart(el.annualSocChart);
   };
 
   if (m2?.riskReport) {
@@ -320,6 +449,18 @@ function renderM3Summary(state) {
     el.annualService.textContent = "--%";
     el.annualOverflowMonths.textContent = "--";
     el.annualSocMonths.textContent = "--";
+
+    el.annualConclusionText.textContent = "全年连续验证正在执行，结论将在年度结果返回后生成。";
+    el.annualJudgement.textContent = "验证中";
+    el.annualMainRisk.textContent = "--";
+    el.annualFocusMonths.textContent = "--";
+    el.annualM4Focus.textContent = "--";
+
+    el.annualChartMeta.textContent = "正在执行全年验证，月度风险画像将在结果返回后生成。";
+    resetAnnualChart(el.annualUnmetChart, "验证中");
+    resetAnnualChart(el.annualServiceChart, "验证中");
+    resetAnnualChart(el.annualOverflowChart, "验证中");
+    resetAnnualChart(el.annualSocChart, "验证中");
     return;
   }
 
@@ -329,6 +470,18 @@ function renderM3Summary(state) {
     el.annualService.textContent = "--%";
     el.annualOverflowMonths.textContent = "--";
     el.annualSocMonths.textContent = "--";
+
+    el.annualConclusionText.textContent = "全年连续验证失败，暂无法形成年度结论。";
+    el.annualJudgement.textContent = "验证失败";
+    el.annualMainRisk.textContent = "--";
+    el.annualFocusMonths.textContent = "--";
+    el.annualM4Focus.textContent = "--";
+
+    el.annualChartMeta.textContent = "全年验证失败，暂无法生成月度风险画像。";
+    resetAnnualChart(el.annualUnmetChart, "验证失败");
+    resetAnnualChart(el.annualServiceChart, "验证失败");
+    resetAnnualChart(el.annualOverflowChart, "验证失败");
+    resetAnnualChart(el.annualSocChart, "验证失败");
     return;
   }
 
@@ -338,6 +491,18 @@ function renderM3Summary(state) {
     el.annualService.textContent = "--%";
     el.annualOverflowMonths.textContent = "--";
     el.annualSocMonths.textContent = "--";
+
+    el.annualConclusionText.textContent = "已完成路线选择，等待年度验证结果后形成结论。";
+    el.annualJudgement.textContent = "等待验证";
+    el.annualMainRisk.textContent = "--";
+    el.annualFocusMonths.textContent = "--";
+    el.annualM4Focus.textContent = "--";
+
+    el.annualChartMeta.textContent = "全年验证结果返回后，这里将展示 12 个月风险分布。";
+    resetAnnualChart(el.annualUnmetChart);
+    resetAnnualChart(el.annualServiceChart);
+    resetAnnualChart(el.annualOverflowChart);
+    resetAnnualChart(el.annualSocChart);
     return;
   }
 
@@ -346,6 +511,76 @@ function renderM3Summary(state) {
   el.annualService.textContent = `${formatPercent(annual.serviceRate || 0, 1)}%`;
   el.annualOverflowMonths.textContent = String(annual.monthsWithOverflow || 0);
   el.annualSocMonths.textContent = String(annual.monthsWithSocRisk || 0);
+
+  // 绘制月度风险画像
+  const monthly = annualResult.rawAnnual?.monthly || [];
+
+  if (!monthly.length) {
+    el.annualChartMeta.textContent = "全年验证已完成，但未返回月度明细，暂无法绘制月度图表。";
+    resetAnnualChart(el.annualUnmetChart);
+    resetAnnualChart(el.annualServiceChart);
+    resetAnnualChart(el.annualOverflowChart);
+    resetAnnualChart(el.annualSocChart);
+    return;
+  }
+
+  el.annualChartMeta.textContent =
+    `${annualResult.selectedRouteLabel || selectedRoute.label} 的全年结果已拆分为 12 个月画像，可用于定位残余风险集中月份。`;
+
+  const monthlyUnmet = monthly.map((m) => Number(m.unmetTotal || 0));
+  const monthlyService = monthly.map((m) => {
+    const delivered = Number(m.deliveredEnergy || 0);
+    const unmet = Number(m.unmetTotal || 0);
+    const demand = delivered + unmet;
+    return demand > 0 ? delivered / demand : 0;
+  });
+  const monthlyOverflow = monthly.map((m) => Number(m.overflowCount || 0));
+  const monthlySoc = monthly.map((m) => Number(m.socMin ?? 100));
+
+  // 生成年度结论
+  const topRiskMonths = getTopRiskMonths(monthlyUnmet, monthlyService, monthlyOverflow, monthlySoc);
+  const topRiskMonthText = topRiskMonths.length
+    ? topRiskMonths.map((item) => item.label).join(" / ")
+    : "无明显集中月份";
+
+  const annualJudgement = getAnnualJudgement(annual);
+  const annualMainRisk = getAnnualMainRisk(annual);
+  const annualM4Focus = getM4FocusText(annual);
+
+  el.annualJudgement.textContent = annualJudgement;
+  el.annualMainRisk.textContent = annualMainRisk;
+  el.annualFocusMonths.textContent = topRiskMonthText;
+  el.annualM4Focus.textContent = annualM4Focus;
+
+  el.annualConclusionText.textContent =
+    annualJudgement === "全年表现基本稳健"
+      ? `${annualResult.selectedRouteLabel || selectedRoute.label} 在全年连续验证中未暴露显著结构性风险，可进入 M4 进行最终方案对照与工程定型。`
+      : `${annualResult.selectedRouteLabel || selectedRoute.label} 在全年连续验证中仍暴露 ${annualMainRisk}，风险主要集中于 ${topRiskMonthText}，因此需要继续进入 M4 做工程加固定型。`;
+
+  // 绘制月度风险画像
+  renderAnnualBarChart(el.annualUnmetChart, monthlyUnmet, {
+    maxValue: Math.max(...monthlyUnmet, 1),
+    formatter: (v) => `${formatNumber(v, 0)}`,
+    dangerJudge: (v) => v > 0
+  });
+
+  renderAnnualBarChart(el.annualServiceChart, monthlyService, {
+    maxValue: 1,
+    formatter: (v) => `${formatPercent(v, 0)}%`,
+    dangerJudge: (v) => v < 0.95
+  });
+
+  renderAnnualBarChart(el.annualOverflowChart, monthlyOverflow, {
+    maxValue: Math.max(...monthlyOverflow, 1),
+    formatter: (v) => `${Math.round(v)}`,
+    dangerJudge: (v) => v > 0
+  });
+
+  renderAnnualBarChart(el.annualSocChart, monthlySoc, {
+    maxValue: 100,
+    formatter: (v) => `${formatNumber(v, 0)}%`,
+    dangerJudge: (v) => v < 8
+  });
 }
 
 
@@ -373,6 +608,65 @@ function riskDiagnosisText(diagnosis) {
   return parts.join(" ");
 }
 
+function renderM4HandoffBridge(el, selectedRoute, selectedAnnualResult, selectedAnnual, selectedMonthly) {
+  if (!selectedRoute) {
+    el.handoffSummary.textContent =
+      "尚未选择 M3 技术路线。完成 M3-A 并选择路线后，M4 才会获得明确承接对象。";
+    el.handoffRoute.textContent = "--";
+    el.handoffJudgement.textContent = "--";
+    el.handoffMainRisk.textContent = "--";
+    el.handoffFocusMonths.textContent = "--";
+    el.handoffTask.textContent = "等待技术路线选择。";
+    return;
+  }
+
+  el.handoffRoute.textContent = selectedRoute.label;
+
+  if (!selectedAnnual) {
+    el.handoffSummary.textContent =
+      `${selectedRoute.label} 已选定，但 M3-B 全年连续验证尚未完成。`;
+    el.handoffJudgement.textContent = "等待全年验证";
+    el.handoffMainRisk.textContent = "--";
+    el.handoffFocusMonths.textContent = "--";
+    el.handoffTask.textContent = "待 M3-B 返回全年风险结论后，再进入最终工程定型。";
+    return;
+  }
+
+  const annualJudgement = getAnnualJudgement(selectedAnnual);
+  const annualMainRisk = getAnnualMainRisk(selectedAnnual);
+  const annualM4Focus = getM4FocusText(selectedAnnual);
+
+  let focusMonthsText = "无明显集中月份";
+
+  if (selectedMonthly.length) {
+    const monthlyUnmet = selectedMonthly.map((m) => Number(m.unmetTotal || 0));
+    const monthlyService = selectedMonthly.map((m) => {
+      const delivered = Number(m.deliveredEnergy || 0);
+      const unmet = Number(m.unmetTotal || 0);
+      const demand = delivered + unmet;
+      return demand > 0 ? delivered / demand : 0;
+    });
+    const monthlyOverflow = selectedMonthly.map((m) => Number(m.overflowCount || 0));
+    const monthlySoc = selectedMonthly.map((m) => Number(m.socMin ?? 100));
+
+    const topRiskMonths = getTopRiskMonths(monthlyUnmet, monthlyService, monthlyOverflow, monthlySoc);
+    focusMonthsText = topRiskMonths.length
+      ? topRiskMonths.map((item) => item.label).join(" / ")
+      : "无明显集中月份";
+  }
+
+  el.handoffJudgement.textContent = annualJudgement;
+  el.handoffMainRisk.textContent = annualMainRisk;
+  el.handoffFocusMonths.textContent = focusMonthsText;
+
+  el.handoffSummary.textContent =
+    annualJudgement === "全年表现基本稳健"
+      ? `${selectedAnnualResult?.selectedRouteLabel || selectedRoute.label} 已完成全年验证，当前未暴露显著结构性年度风险。M4 将进一步完成方案对照与最终工程定型。`
+      : `${selectedAnnualResult?.selectedRouteLabel || selectedRoute.label} 的全年验证表明仍存在 ${annualMainRisk}，风险主要集中于 ${focusMonthsText}。M4 将据此生成并比较最终工程方案。`;
+
+  el.handoffTask.textContent = annualM4Focus;
+}
+
 function renderM4Summary(state) {
   const result = state.stages.m4.result;
   const m3 = state.stages.m3.result;
@@ -380,6 +674,12 @@ function renderM4Summary(state) {
   const el = dom.m4Summary;
 
   const selectedRoute = selectedRouteKey ? m3?.routeOptions?.[selectedRouteKey] : null;
+  const selectedAnnualResult = m3?.selectedAnnualValidation || null;
+  const selectedAnnual = selectedAnnualResult?.annualValidation || null;
+  const selectedMonthly = selectedAnnualResult?.rawAnnual?.monthly || [];
+
+  renderM4HandoffBridge(el, selectedRoute, selectedAnnualResult, selectedAnnual, selectedMonthly);
+
   if (selectedRoute) {
     el.selectedRoute.textContent = selectedRoute.label;
     el.residualUnmet.textContent = `${formatNumber(selectedRoute.handoffToM4?.residualUnmetKwh || 0, 1)} kWh`;
@@ -392,9 +692,11 @@ function renderM4Summary(state) {
 
   if (!result) {
     el.title.textContent = "M4 尚未运行。";
-    el.meta.textContent = selectedRoute
-      ? "已选择技术路线，可以运行最终方案定型。"
-      : "在 M3 选择路线后运行最终工程方案定型。";
+    el.meta.textContent = selectedAnnual
+      ? "已承接 M3-B 全年验证结论，可以运行最终工程方案定型。"
+      : selectedRoute
+        ? "已选择技术路线，待 M3-B 全年验证完成后进入最终工程方案定型。"
+        : "在 M3 选择路线并完成 M3-B 年度验证后运行最终工程方案定型。";
     el.residualSeverity.textContent = "--";
     el.recommendMain.textContent = "--";
     el.recommendLow.textContent = "--";

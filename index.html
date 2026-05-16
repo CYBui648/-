@@ -424,6 +424,66 @@
     </div>
   </article>
 
+  <article class="info-card m3-annual-conclusion-card">
+    <h4>M3-B 年度验证结论</h4>
+
+    <p class="annual-conclusion-copy" id="m3-annual-conclusion-text">
+      完成所选路线全年验证后，这里将自动提炼年度判断与进入 M4 的依据。
+    </p>
+
+    <div class="diagnosis-grid annual-conclusion-grid">
+      <div>
+        <span>年度判断</span>
+        <strong id="m3-annual-judgement">--</strong>
+      </div>
+      <div>
+        <span>主要残余风险</span>
+        <strong id="m3-annual-main-risk">--</strong>
+      </div>
+      <div>
+        <span>风险集中月份</span>
+        <strong id="m3-annual-focus-months">--</strong>
+      </div>
+      <div>
+        <span>M4 承接重点</span>
+        <strong id="m3-annual-m4-focus">--</strong>
+      </div>
+    </div>
+  </article>
+
+  <article class="info-card m3-annual-chart-card">
+    <div class="annual-chart-head">
+      <div>
+        <h4>M3-B 全年月度风险画像</h4>
+        <p class="helper-copy" id="m3-annual-chart-meta">
+          完成所选路线全年验证后，这里将展示 12 个月风险分布。
+        </p>
+      </div>
+    </div>
+
+    <div class="m3-annual-chart-grid">
+      <section class="mini-annual-chart">
+        <h5>月度未满足电量</h5>
+        <div class="annual-bar-chart" id="m3-annual-unmet-chart"></div>
+      </section>
+
+      <section class="mini-annual-chart">
+        <h5>月度服务率</h5>
+        <div class="annual-bar-chart" id="m3-annual-service-chart"></div>
+      </section>
+
+      <section class="mini-annual-chart">
+        <h5>月度越限次数</h5>
+        <div class="annual-bar-chart" id="m3-annual-overflow-chart"></div>
+      </section>
+
+      <section class="mini-annual-chart">
+        <h5>月度最低储能 SOC</h5>
+        <div class="annual-bar-chart" id="m3-annual-soc-chart"></div>
+      </section>
+    </div>
+  </article>
+
   <details class="disclosure-card">
     <summary>高级调度参数</summary>
     <div class="disclosure-body">
@@ -468,6 +528,45 @@
     </div>
     <button class="primary-btn" id="run-m4" disabled>运行 M4 最终方案定型</button>
   </div>
+
+  <article class="info-card m4-handoff-bridge-card">
+    <div class="m4-handoff-head">
+      <div>
+        <span class="eyebrow">M3-B → M4</span>
+        <h4>承接全年验证结论，进入最终工程定型</h4>
+      </div>
+    </div>
+
+    <p class="helper-copy m4-handoff-copy" id="m4-handoff-summary">
+      完成 M3-B 所选路线全年连续验证后，这里将说明 M4 为什么启动、重点要补什么。
+    </p>
+
+    <div class="diagnosis-grid m4-handoff-grid">
+      <div>
+        <span>承接技术路线</span>
+        <strong id="m4-handoff-route">--</strong>
+      </div>
+      <div>
+        <span>M3-B 年度判断</span>
+        <strong id="m4-handoff-judgement">--</strong>
+      </div>
+      <div>
+        <span>全年主要残余风险</span>
+        <strong id="m4-handoff-main-risk">--</strong>
+      </div>
+      <div>
+        <span>风险集中月份</span>
+        <strong id="m4-handoff-focus-months">--</strong>
+      </div>
+    </div>
+
+    <div class="m4-task-banner">
+      <span>当前 M4 任务</span>
+      <strong id="m4-handoff-task">
+        等待 M3-B 结果后，确定最终工程加固方向。
+      </strong>
+    </div>
+  </article>
 
   <section class="m4-decision-grid">
     <article class="result-summary-card decision-summary-card">

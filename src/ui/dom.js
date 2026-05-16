@@ -88,9 +88,28 @@ m3Summary: {
   annualUnmet: document.getElementById("m3-annual-unmet"),
   annualService: document.getElementById("m3-annual-service"),
   annualOverflowMonths: document.getElementById("m3-annual-overflow-months"),
-  annualSocMonths: document.getElementById("m3-annual-soc-months")
+  annualSocMonths: document.getElementById("m3-annual-soc-months"),
+
+  annualConclusionText: document.getElementById("m3-annual-conclusion-text"),
+  annualJudgement: document.getElementById("m3-annual-judgement"),
+  annualMainRisk: document.getElementById("m3-annual-main-risk"),
+  annualFocusMonths: document.getElementById("m3-annual-focus-months"),
+  annualM4Focus: document.getElementById("m3-annual-m4-focus"),
+
+  annualChartMeta: document.getElementById("m3-annual-chart-meta"),
+  annualUnmetChart: document.getElementById("m3-annual-unmet-chart"),
+  annualServiceChart: document.getElementById("m3-annual-service-chart"),
+  annualOverflowChart: document.getElementById("m3-annual-overflow-chart"),
+  annualSocChart: document.getElementById("m3-annual-soc-chart")
   },
   m4Summary: {
+  handoffSummary: document.getElementById("m4-handoff-summary"),
+  handoffRoute: document.getElementById("m4-handoff-route"),
+  handoffJudgement: document.getElementById("m4-handoff-judgement"),
+  handoffMainRisk: document.getElementById("m4-handoff-main-risk"),
+  handoffFocusMonths: document.getElementById("m4-handoff-focus-months"),
+  handoffTask: document.getElementById("m4-handoff-task"),
+
   title: document.getElementById("m4-summary-title"),
   meta: document.getElementById("m4-summary-meta"),
   selectedRoute: document.getElementById("m4-selected-route"),

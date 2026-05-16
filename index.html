@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MGS V2 架构重写版</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">MGS</div>
+        <div>
+          <h1>光储充决策平台 V2</h1>
+          <p>架构重写 · 保留原始业务主线</p>
+        </div>
+      </div>
+
+      <nav class="stage-nav" id="stage-nav">
+        <button class="stage-tab active" data-stage="m1">
+          <span class="stage-index">1</span>
+          <span>
+            <strong>M1 基准规划</strong>
+            <small>标准周配置</small>
+          </span>
+        </button>
+        <button class="stage-tab locked" data-stage="m2">
+          <span class="stage-index">2</span>
+          <span>
+            <strong>M2 压力测试</strong>
+            <small>真实月风险暴露</small>
+          </span>
+        </button>
+        <button class="stage-tab locked" data-stage="m3">
+          <span class="stage-index">3</span>
+          <span>
+            <strong>M3 调度诊断</strong>
+            <small>软调度消化风险</small>
+          </span>
+        </button>
+        <button class="stage-tab locked" data-stage="m4">
+          <span class="stage-index">4</span>
+          <span>
+            <strong>M4 加固规划</strong>
+            <small>残余风险方案器</small>
+          </span>
+        </button>
+      </nav>
+
+      <section class="sidebar-note">
+        <h2>V2-0 目标</h2>
+        <p>先把软件骨架搭稳：状态中心、阶段门禁、Worker 协议、页面渲染分层。</p>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">当前阶段</span>
+          <h2 id="active-stage-title">M1 基准规划</h2>
+        </div>
+        <div class="status-pill" id="global-status">系统已就绪</div>
+      </header>
+
+      <section class="hero-card">
+        <div>
+          <span class="eyebrow">软件主线</span>
+          <h3>输入画像 → M1 → M2 → M3 → M4 → 决策报告</h3>
+          <p>V2-4.2 已重排 M3 / M4 页面层级：先看路线与推荐，再展开参数、指标与原始结果。</p>
+        </div>
+        <div class="hero-grid">
+          <div class="mini-card">
+            <span>状态中心</span>
+            <strong id="summary-state">已初始化</strong>
+          </div>
+          <div class="mini-card">
+            <span>Worker 通讯</span>
+            <strong id="summary-worker">等待任务</strong>
+          </div>
+          <div class="mini-card">
+            <span>阶段解锁</span>
+            <strong id="summary-unlock">仅 M1</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage-panel active" data-panel="m1">
+  <div class="panel-head">
+    <div>
+      <span class="eyebrow">Stage M1</span>
+      <h3>标准周基准规划器</h3>
+      <p>这一步已经接入旧版 M1 的真实计算主链：需求生成、桩数推导、光伏/储能/PCS 基准配置。</p>
+    </div>
+    <button class="primary-btn" id="run-m1">运行 M1 真实规划</button>
+  </div>
+
+  <div class="m1-layout">
+    <section class="input-stack">
+      <article class="info-card input-card">
+        <h4>园区与需求画像</h4>
+        <div class="form-grid">
+          <label>典型城市
+            <select data-m1-input="climateKey" id="m1-climateKey">
+              <option value="harbin">哈尔滨</option>
+              <option value="shenyang">沈阳</option>
+              <option value="beijing">北京</option>
+              <option value="xian">西安</option>
+              <option value="shanghai">上海</option>
+              <option value="wuhan">武汉</option>
+              <option value="guangzhou">广州</option>
+              <option value="shenzhen">深圳</option>
+              <option value="kunming">昆明</option>
+              <option value="guiyang">贵阳</option>
+              <option value="lasa">拉萨</option>
+              <option value="xining">西宁</option>
+            </select>
+          </label>
+          <label>园区电动车数
+            <input type="number" data-m1-input="evCount" min="0" max="1000" step="5">
+          </label>
+          <label>固定车占比
+            <input type="number" data-m1-input="teacherRatio" min="0.30" max="0.95" step="0.05">
+          </label>
+          <label>低电量焦虑率
+            <input type="number" data-m1-input="anxietyRatio" min="0" max="1" step="0.05">
+          </label>
+          <label>平均电池容量 kWh
+            <input type="number" data-m1-input="batteryCapMean" min="40" max="100" step="5">
+          </label>
+          <label>平均入场 SOC
+            <input type="number" data-m1-input="initSocMean" min="0.10" max="0.80" step="0.05">
+          </label>
+          <label>目标充电 SOC
+            <input type="number" data-m1-input="targetSocMean" min="0.70" max="1" step="0.05">
+          </label>
+          <label>节假日充电比例
+            <input type="number" data-m1-input="holidayRatio" min="0" max="0.30" step="0.01">
+          </label>
+        </div>
+      </article>
+
+      <article class="info-card input-card">
+        <h4>边界与目标</h4>
+        <div class="form-grid">
+          <label>快充 SLA
+            <input type="number" data-m1-input="slaFast" min="0.80" max="1" step="0.01">
+          </label>
+          <label>慢充 SLA
+            <input type="number" data-m1-input="slaSlow" min="0.70" max="1" step="0.01">
+          </label>
+          <label>新能源覆盖率目标
+            <input type="number" data-m1-input="renewableTarget" min="0" max="1" step="0.05">
+          </label>
+          <label>储能保底天数
+            <input type="number" data-m1-input="backupDays" min="0" max="7" step="1">
+          </label>
+          <label>屋顶面积 m²
+            <input type="number" data-m1-input="roofArea" min="2000" max="50000" step="500">
+          </label>
+          <label>车桩比上限
+            <input type="number" data-m1-input="evRatio" min="1" max="10" step="1">
+          </label>
+        </div>
+      </article>
+
+      <article class="info-card input-card">
+        <h4>成本参数</h4>
+        <div class="form-grid">
+          <label>PV 单价 元/W
+            <input type="number" data-m1-input="pvPrice" min="1" max="2" step="0.05">
+          </label>
+          <label>PV 施工费率 %
+            <input type="number" data-m1-input="pvRate" min="10" max="20" step="1">
+          </label>
+          <label>ESS 单价 元/Wh
+            <input type="number" data-m1-input="storBasePrice" min="0.6" max="1.3" step="0.05">
+          </label>
+          <label>ESS 施工费率 %
+            <input type="number" data-m1-input="storRate" min="8" max="18" step="1">
+          </label>
+          <label>7kW 桩价 万元
+            <input type="number" data-m1-input="cost7kw" min="0.1" max="0.6" step="0.05">
+          </label>
+          <label>30kW 桩价 万元
+            <input type="number" data-m1-input="cost30kw" min="1.5" max="4" step="0.1">
+          </label>
+          <label>EMS 造价 万元
+            <input type="number" data-m1-input="ems" min="5" max="20" step="1">
+          </label>
+          <label>PV 有效效率
+            <input type="number" data-m1-input="pvEfficiency" min="0.65" max="0.80" step="0.01">
+          </label>
+        </div>
+      </article>
+    </section>
+
+    <section class="output-stack">
+      <article class="result-summary-card">
+        <span class="eyebrow">M1 结果摘要</span>
+        <h4 id="m1-summary-title">尚未运行真实规划。</h4>
+        <p id="m1-summary-meta">运行后，这里会显示城市、气候区与新能源目标。</p>
+      </article>
+
+      <div class="metric-grid" id="m1-metrics">
+        <div class="metric-card"><span>光伏装机</span><strong id="m1-pv">--</strong><small>kW</small></div>
+        <div class="metric-card"><span>储能容量</span><strong id="m1-storage">--</strong><small>kWh</small></div>
+        <div class="metric-card"><span>PCS 功率</span><strong id="m1-pcs">--</strong><small>kW</small></div>
+        <div class="metric-card"><span>总投资</span><strong id="m1-capex">--</strong><small>万元</small></div>
+        <div class="metric-card"><span>7kW / 30kW 桩</span><strong id="m1-piles">--</strong><small>台</small></div>
+        <div class="metric-card"><span>新能源覆盖率</span><strong id="m1-renewable">--</strong><small>%</small></div>
+        <div class="metric-card"><span>日均服务电量</span><strong id="m1-daily-kwh">--</strong><small>kWh</small></div>
+        <div class="metric-card"><span>LCOE</span><strong id="m1-lcoe">--</strong><small>元/kWh</small></div>
+      </div>
+
+      <article class="info-card m1-diagnosis-card">
+        <h4>需求与约束摘要</h4>
+        <div class="diagnosis-grid">
+          <div><span>标准周峰值</span><strong id="m1-peak">-- kW</strong></div>
+          <div><span>平均单次需求</span><strong id="m1-avg-need">-- kWh</strong></div>
+          <div><span>弃光率</span><strong id="m1-curtailment">--%</strong></div>
+          <div><span>年购电量</span><strong id="m1-grid-annual">-- kWh</strong></div>
+        </div>
+      </article>
+
+      <pre class="result-box compact-result" id="result-m1">尚未运行 M1。</pre>
+    </section>
+  </div>
+</section>
+
+
+      <section class="stage-panel" data-panel="m2">
+  <div class="panel-head">
+    <div>
+      <span class="eyebrow">Stage M2</span>
+      <h3>真实月压力测试器</h3>
+      <p>读取 M1 的真实硬件方案，导入 TMY 气象数据，在最差月或指定月份暴露峰值、缺口、排队与储能风险。</p>
+    </div>
+    <button class="primary-btn" id="run-m2" disabled>运行 M2 真实压力测试</button>
+  </div>
+
+  <div class="m2-layout">
+    <section class="input-stack">
+      <article class="info-card input-card">
+        <h4>气象文件与月份</h4>
+        <label class="file-drop">
+          <span>上传包含 G_tilt 列、8760 行的 TMY CSV</span>
+          <input type="file" id="m2-csv-file" accept=".csv">
+        </label>
+        <p class="status-text" id="m2-csv-status">尚未加载 TMY CSV。</p>
+        <div class="form-grid">
+          <label>月份选择
+            <select data-m2-input="monthMode" id="m2-monthMode">
+              <option value="auto">自动选择年内辐照最差月</option>
+              <option value="manual">手动指定月份</option>
+            </select>
+          </label>
+          <label>指定月份
+            <select data-m2-input="monthIndex" id="m2-monthIndex">
+              <option value="0">1月</option>
+              <option value="1">2月</option>
+              <option value="2">3月</option>
+              <option value="3">4月</option>
+              <option value="4">5月</option>
+              <option value="5">6月</option>
+              <option value="6">7月</option>
+              <option value="7">8月</option>
+              <option value="8">9月</option>
+              <option value="9">10月</option>
+              <option value="10">11月</option>
+              <option value="11">12月</option>
+            </select>
+          </label>
+        </div>
+      </article>
+
+      <article class="info-card input-card">
+        <h4>M2 压力口径</h4>
+        <div class="form-grid">
+          <label>变压器红线 kW
+            <input type="number" data-m2-input="transformerLimitKw" min="50" max="5000" step="50">
+          </label>
+          <label>固定车占比
+            <input type="number" data-m2-input="teacherRatio" min="0.30" max="0.95" step="0.05">
+          </label>
+          <label>焦虑抢充率
+            <input type="number" data-m2-input="anxietyRatio" min="0" max="1" step="0.05">
+          </label>
+        </div>
+        <p class="helper-copy">M2 暂时沿用 M1 的硬件规模、电池口径与节假日比例，只调节真实月压力环境和行为强度。</p>
+      </article>
+
+      <article class="info-card m2-hardware-card">
+        <h4>自动承接的 M1 硬件</h4>
+        <div class="diagnosis-grid">
+          <div><span>PV</span><strong id="m2-inherit-pv">-- kW</strong></div>
+          <div><span>储能</span><strong id="m2-inherit-storage">-- kWh</strong></div>
+          <div><span>PCS</span><strong id="m2-inherit-pcs">-- kW</strong></div>
+          <div><span>桩数</span><strong id="m2-inherit-piles">--</strong></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="output-stack">
+      <article class="result-summary-card">
+        <span class="eyebrow">M2 结果摘要</span>
+        <h4 id="m2-summary-title">M2 尚未运行。</h4>
+        <p id="m2-summary-meta">上传气象 CSV 后，运行真实月压力测试。</p>
+      </article>
+
+      <div class="metric-grid" id="m2-metrics">
+        <div class="metric-card"><span>压力月峰值</span><strong id="m2-real-peak">--</strong><small>kW</small></div>
+        <div class="metric-card"><span>变压器越限</span><strong id="m2-overflow">--</strong><small>次</small></div>
+        <div class="metric-card"><span>总缺口</span><strong id="m2-unmet">--</strong><small>kWh</small></div>
+        <div class="metric-card"><span>排队放弃</span><strong id="m2-abandoned">--</strong><small>辆</small></div>
+        <div class="metric-card"><span>最低 SOC</span><strong id="m2-soc-min">--</strong><small>%</small></div>
+        <div class="metric-card"><span>变压器利用率</span><strong id="m2-trans-util">--</strong><small>%</small></div>
+        <div class="metric-card"><span>压力月购电成本</span><strong id="m2-grid-cost">--</strong><small>元</small></div>
+        <div class="metric-card"><span>弃光率</span><strong id="m2-curtailment">--</strong><small>%</small></div>
+      </div>
+
+      <article class="info-card m1-diagnosis-card">
+        <h4>交给 M3 的风险摘要</h4>
+        <div class="diagnosis-grid">
+          <div><span>峰值风险</span><strong id="m2-risk-peak">--</strong></div>
+          <div><span>服务风险</span><strong id="m2-risk-service">--</strong></div>
+          <div><span>储能低位风险</span><strong id="m2-risk-storage">--</strong></div>
+          <div><span>固定车并发 P99</span><strong id="m2-fixed-p99">--</strong></div>
+        </div>
+      </article>
+
+      <pre class="result-box compact-result" id="result-m2">M2 尚未解锁。</pre>
+    </section>
+  </div>
+</section>
+
+
+      <section class="stage-panel" data-panel="m3">
+  <div class="panel-head">
+    <div>
+      <span class="eyebrow">Stage M3</span>
+      <h3>技术路线并列评估</h3>
+      <p>先看两条路线各自会留下什么风险，再按项目条件选择一条进入 M4。M3 不替用户裁决，只把两条路算清楚。</p>
+    </div>
+    <button class="primary-btn" id="run-m3" disabled>运行 M3 双路线评估</button>
+  </div>
+
+  <section class="decision-hero">
+    <article class="result-summary-card decision-summary-card">
+      <span class="eyebrow">M3 结果摘要</span>
+      <h4 id="m3-summary-title">M3 尚未运行。</h4>
+      <p id="m3-summary-meta">M2 完成后，运行双路线评估。</p>
+    </article>
+
+    <article class="info-card m3-baseline-card compact-card">
+      <h4>承接的 M2 压力基线</h4>
+      <div class="diagnosis-grid">
+        <div><span>压力月</span><strong id="m3-baseline-month">--</strong></div>
+        <div><span>M2 峰值</span><strong id="m3-baseline-peak">-- kW</strong></div>
+        <div><span>M2 总缺口</span><strong id="m3-baseline-unmet">-- kWh</strong></div>
+        <div><span>M2 排队缺口</span><strong id="m3-baseline-queue">-- kWh</strong></div>
+      </div>
+    </article>
+  </section>
+
+  <section class="route-grid route-grid-prominent">
+    <article class="route-card" id="m3-route-traditional-card">
+      <div class="route-head">
+        <div>
+          <span class="route-kicker">路线 A</span>
+          <h4>传统桩站调度路线</h4>
+        </div>
+        <em id="m3-trad-selected">未选择</em>
+      </div>
+      <p class="route-copy">适合已有固定桩位、场地改造条件有限、希望优先通过 EMS 优化运行的项目。</p>
+      <div class="route-metrics">
+        <div><span>调度后峰值</span><strong id="m3-trad-peak">-- kW</strong></div>
+        <div><span>残余总缺口</span><strong id="m3-trad-unmet">-- kWh</strong></div>
+        <div><span>残余排队缺口</span><strong id="m3-trad-queue">-- kWh</strong></div>
+        <div><span>是否需 M4 加固</span><strong id="m3-trad-status">--</strong></div>
+      </div>
+      <button class="secondary-btn route-select-btn" data-m3-route="traditional_pile" id="select-m3-traditional" disabled>选择传统桩站路线进入 M4</button>
+    </article>
+
+    <article class="route-card" id="m3-route-flex-card">
+      <div class="route-head">
+        <div>
+          <span class="route-kicker">路线 B</span>
+          <h4>柔性调度路线</h4>
+        </div>
+        <em id="m3-flex-selected">未选择</em>
+      </div>
+      <p class="route-copy">适合具备柔性配电、动态枪位接入或愿意采用矩阵化调度架构的项目。</p>
+      <div class="route-metrics">
+        <div><span>调度后峰值</span><strong id="m3-flex-peak">-- kW</strong></div>
+        <div><span>残余总缺口</span><strong id="m3-flex-unmet">-- kWh</strong></div>
+        <div><span>建议 N_matrix</span><strong id="m3-flex-nmatrix">--</strong></div>
+        <div><span>是否需 M4 加固</span><strong id="m3-flex-status">--</strong></div>
+      </div>
+      <button class="secondary-btn route-select-btn" data-m3-route="flex_matrix" id="select-m3-flex" disabled>选择柔性调度路线进入 M4</button>
+    </article>
+  </section>
+
+  <article class="info-card selected-handoff-card">
+    <h4>当前已选择路线</h4>
+    <div class="diagnosis-grid">
+      <div><span>技术路线</span><strong id="m3-selected-route">尚未选择</strong></div>
+      <div><span>是否仍需硬件加固</span><strong id="m3-selected-need">--</strong></div>
+      <div><span>残余缺口</span><strong id="m3-selected-unmet">-- kWh</strong></div>
+      <div><span>残余越限</span><strong id="m3-selected-overflow">-- 次</strong></div>
+    </div>
+  </article>
+
+  <details class="disclosure-card">
+    <summary>高级调度参数</summary>
+    <div class="disclosure-body">
+      <div class="form-grid">
+        <label class="toggle-line">启用 V2G
+          <input type="checkbox" data-m3-input="useV2G" id="m3-useV2G">
+        </label>
+        <label>价格敏感阈值
+          <input type="number" data-m3-input="priceShiftThreshold" min="0" max="1" step="0.05">
+        </label>
+        <label>削峰触发阈值
+          <input type="number" data-m3-input="clipThreshold" min="0.70" max="1" step="0.01">
+        </label>
+        <label>可限流最小冗余 小时
+          <input type="number" data-m3-input="minClipSlackHours" min="0.5" max="8" step="0.5">
+        </label>
+        <label>单车 V2G 上限 kWh
+          <input type="number" data-m3-input="maxV2gPerEvKwh" min="0" max="30" step="1">
+        </label>
+        <label>V2G 损耗成本 元/kWh
+          <input type="number" data-m3-input="v2gWearCostYuanPerKwh" min="0" max="1" step="0.01">
+        </label>
+      </div>
+      <p class="helper-copy">这些是两条路线共享的调度口径。默认折叠，是为了让 M3 页面先聚焦“选路线”，再看高级参数。</p>
+    </div>
+  </details>
+
+  <details class="disclosure-card">
+    <summary>查看 M3 原始结果</summary>
+    <div class="disclosure-body">
+      <pre class="result-box compact-result" id="result-m3">M3 尚未解锁。</pre>
+    </div>
+  </details>
+</section>
+
+<section class="stage-panel" data-panel="m4">
+  <div class="panel-head">
+    <div>
+      <span class="eyebrow">Stage M4</span>
+      <h3>最终工程方案定型器</h3>
+      <p>先看系统最终推荐什么，再看为什么推荐。M4 沿 M3 已选路线生成 S0~S4，并完成复验与综合评分。</p>
+    </div>
+    <button class="primary-btn" id="run-m4" disabled>运行 M4 最终方案定型</button>
+  </div>
+
+  <section class="m4-decision-grid">
+    <article class="result-summary-card decision-summary-card">
+      <span class="eyebrow">M4 推荐摘要</span>
+      <h4 id="m4-summary-title">M4 尚未运行。</h4>
+      <p id="m4-summary-meta">在 M3 选择路线后运行最终工程方案定型。</p>
+    </article>
+
+    <article class="info-card m4-recommendation-card">
+      <h4>综合推荐</h4>
+      <div class="diagnosis-grid">
+        <div><span>综合推荐</span><strong id="m4-recommend-main">--</strong></div>
+        <div><span>综合评分</span><strong id="m4-recommend-score">--</strong></div>
+        <div><span>低投资备选</span><strong id="m4-recommend-low">--</strong></div>
+        <div><span>高保障备选</span><strong id="m4-recommend-safe">--</strong></div>
+      </div>
+      <p class="helper-copy" id="m4-recommend-explain">运行后，这里会解释为什么推荐该方案。</p>
+    </article>
+  </section>
+
+  <article class="info-card m4-hardware-focus">
+    <h4>推荐方案需要补什么</h4>
+    <div class="diagnosis-grid">
+      <div><span>追加 PV</span><strong id="m4-delta-pv">-- kW</strong></div>
+      <div><span>追加储能</span><strong id="m4-delta-storage">-- kWh</strong></div>
+      <div><span>追加 PCS</span><strong id="m4-delta-pcs">-- kW</strong></div>
+      <div><span>服务侧增量</span><strong id="m4-delta-service">--</strong></div>
+    </div>
+  </article>
+
+  <article class="info-card">
+    <h4>S0~S4 方案对比</h4>
+    <div class="scenario-table-wrap">
+      <table class="scenario-table">
+        <thead>
+          <tr>
+            <th>方案</th>
+            <th>追加投资</th>
+            <th>全年缺口</th>
+            <th>越限</th>
+            <th>PVUR</th>
+            <th>GFF</th>
+            <th>LCOE</th>
+            <th>评分</th>
+          </tr>
+        </thead>
+        <tbody id="m4-scenario-table-body">
+          <tr><td colspan="8">M4 尚未运行。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <details class="disclosure-card">
+    <summary>承接路线与残余风险</summary>
+    <div class="disclosure-body">
+      <div class="diagnosis-grid">
+        <div><span>来自 M3 的选择</span><strong id="m4-selected-route">--</strong></div>
+        <div><span>残余风险等级</span><strong id="m4-residual-severity">--</strong></div>
+        <div><span>残余缺口</span><strong id="m4-residual-unmet">-- kWh</strong></div>
+        <div><span>残余排队缺口</span><strong id="m4-residual-queue">-- kWh</strong></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="disclosure-card">
+    <summary>指标口径与 M4 原始结果</summary>
+    <div class="disclosure-body">
+      <div class="m4-metric-note">
+        <div><span>风险修复</span><strong>残余缺口 / 越限</strong></div>
+        <div><span>投资代价</span><strong>追加 CAPEX</strong></div>
+        <div><span>光伏利用</span><strong>PVUR proxy</strong></div>
+        <div><span>电网友好</span><strong>GFF proxy</strong></div>
+        <div><span>经济性</span><strong>LCOE</strong></div>
+      </div>
+      <pre class="result-box compact-result" id="result-m4">M4 尚未解锁。</pre>
+    </div>
+  </details>
+</section>
+
+</main>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

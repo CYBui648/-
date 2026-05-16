@@ -1,4 +1,5 @@
 import { CITY_CLIMATE_DATA } from "../config/climate-data.js";
+import { runAnnualValidation } from "./m4-dispatch-core.js";
 
 const GZ = {
     panelEfficiency: 0.21, workdayDays: 250, holidayDays: 115,
@@ -920,4 +921,80 @@ export function runM3DispatchDiagnosis(context) {
   const payload = normalizeM3Payload(context);
   const raw = runDispatchAssessment(payload);
   return mapToM3Result(raw, payload, context.previousResults.m2);
+}
+
+export function runM3SelectedRouteAnnualValidation(context) {
+  const input = context.input || {};
+  const m3Input = input.m3 || {};
+  const m3Result = context.previousResults?.m3;
+
+  const selectedRouteKey = m3Input.selectedRoute || null;
+  const selectedRoute = selectedRouteKey
+    ? m3Result?.routeOptions?.[selectedRouteKey]
+    : null;
+
+  if (!m3Result?.routeOptions) {
+    throw new Error("M3-B 缺少 M3-A 结果，无法执行所选路线全年验证。");
+  }
+
+  if (!selectedRouteKey || !selectedRoute) {
+    throw new Error("请先在 M3 中选择一条技术路线，再执行全年连续验证。");
+  }
+
+  const payload = normalizeM3Payload(context);
+
+  // 按所选路线重置年度验证调度口径
+  payload.params.dispatchMode = selectedRouteKey;
+  payload.params.useClipping = selectedRouteKey === "flex_matrix";
+  payload.params.useV2G = selectedRouteKey === "flex_matrix"
+    ? Boolean(m3Input.useV2G ?? true)
+    : false;
+
+  // 柔性矩阵路线需要沿用 M3-A 算出的矩阵接口规模
+  if (selectedRouteKey === "flex_matrix") {
+    const matrixSizing = selectedRoute.matrixSizing || {};
+    const fallbackNMatrix = payload.config.n7 + payload.config.n30;
+
+    payload.params.nMatrix = Number(matrixSizing.recommended ?? fallbackNMatrix);
+    payload.params.nMatrixP95 = Number(matrixSizing.p95 ?? payload.params.nMatrix);
+    payload.params.nMatrixP99 = Number(matrixSizing.p99 ?? payload.params.nMatrix);
+    payload.params.nMatrixMax = Number(matrixSizing.max ?? payload.params.nMatrix);
+  }
+
+  const annualResult = runAnnualValidation({
+    preferred: selectedRouteKey,
+    config: payload.config,
+    params: payload.params,
+    economics: payload.economics
+  });
+
+  const annual = annualResult.annual || {};
+
+  return {
+    contract: "M3AnnualValidationResult",
+    selectedRouteKey,
+    selectedRouteLabel: selectedRoute.label,
+
+    annualValidation: {
+      totalUnmetKwh: round(annual.totalUnmet || 0, 1),
+      totalQueueUnmetKwh: round(annual.totalQueueUnmet || 0, 1),
+      totalOverflowCount: annual.totalOverflow || 0,
+      serviceRate: round(annual.serviceRate || 0, 4),
+
+      monthsWithOverflow: annual.monthsWithOverflow || 0,
+      monthsWithSocRisk: annual.monthsWithSocRisk || 0,
+
+      totalDeliveredKwh: round(annual.totalDelivered || 0, 1),
+      totalGridBuyKwh: round(annual.totalGridBuy || 0, 1),
+      totalV2gKwh: round(annual.totalV2g || 0, 1),
+
+      worstSocPct: round(annual.worstSoc ?? 100, 1),
+      worstMonth: annual.worstMonth ?? null,
+
+      annualGridCostYuan: round(annual.annualGridCost || 0, 1),
+      annualLcoeYuanPerKwh: round(annual.annualLCOE || 999, 3)
+    },
+
+    rawAnnual: annualResult
+  };
 }

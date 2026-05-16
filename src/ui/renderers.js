@@ -300,11 +300,13 @@ function riskDiagnosisText(diagnosis) {
   const power = diagnosis.powerRisk || {};
   const energy = diagnosis.energyRisk || {};
   const service = diagnosis.serviceRisk || {};
+  const delivery = diagnosis.deliveryServiceRisk || {};
   const storage = diagnosis.storageRisk || {};
 
   if (power.active) parts.push(`功率:${riskLabel(power)}`);
   if (energy.active) parts.push(`能量:${riskLabel(energy)}`);
-  if (service.active) parts.push(`服务:${riskLabel(service)}`);
+  if (service.active) parts.push(`接入:${riskLabel(service)}`);
+  if (delivery.active) parts.push(`供电:${riskLabel(delivery)}`);
   if (storage.active) parts.push(`储能:${riskLabel(storage)}`);
 
   if (!parts.length) return "无显著残余风险";

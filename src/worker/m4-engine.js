@@ -128,6 +128,13 @@ function riskLevel(value, thresholds) {
   return "high";
 }
 
+function maxRiskLevel(...levels) {
+  const rank = { low: 1, medium: 2, high: 3 };
+  return levels
+    .filter(Boolean)
+    .sort((a, b) => rank[b] - rank[a])[0] || null;
+}
+
 function diagnoseResidualRisk(base) {
   const handoff = base.selectedRoute.handoffToM4 || {};
   const routeResult = base.selectedRoute.result || {};
@@ -138,19 +145,32 @@ function diagnoseResidualRisk(base) {
   const peak = safeNumber(routeResult.realPeakKw, 0);
   const transformerGapKw = Math.max(0, peak - base.config.transformerLimit);
 
-  const serviceActive = residualQueue > 1 || residualUnmet > 1;
+  // 拆分为两种服务风险：接入拥堵 vs 供电不足
+  const accessServiceActive = residualQueue > 1;
+  const deliveryServiceActive = residualUnmet > 1;
   const powerActive = residualOverflow > 0 || transformerGapKw > 1;
   const energyActive = residualUnmet > 1;
   const storageActive = residualSoc < 8;
 
+  // powerLevel 用 maxRiskLevel 聚合两个维度，避免单维度零值覆盖高维度误判
   const powerLevel = powerActive
-    ? riskLevel(transformerGapKw, [30, 100]) || riskLevel(residualOverflow, [15, 30])
+    ? maxRiskLevel(
+        transformerGapKw > 1
+          ? riskLevel(transformerGapKw, [30, 100])
+          : null,
+        residualOverflow > 0
+          ? riskLevel(residualOverflow, [15, 30])
+          : null
+      )
     : null;
   const energyLevel = energyActive
     ? riskLevel(residualUnmet, [60, 200])
     : null;
-  const serviceLevel = serviceActive
+  const accessServiceLevel = accessServiceActive
     ? riskLevel(residualQueue, [30, 100])
+    : null;
+  const deliveryServiceLevel = deliveryServiceActive
+    ? riskLevel(residualUnmet, [60, 200])
     : null;
   const storageLevel = storageActive
     ? (residualSoc >= 5 ? "low" : residualSoc >= 3 ? "medium" : "high")
@@ -169,7 +189,10 @@ function diagnoseResidualRisk(base) {
     residualSocMinPct: round(residualSoc, 1),
     routePeakKw: round(peak, 1),
     transformerGapKw: round(transformerGapKw, 1),
-    serviceRisk: { active: serviceActive, level: serviceLevel },
+    // serviceRisk 今后专指"接入型服务风险"
+    serviceRisk: { active: accessServiceActive, level: accessServiceLevel },
+    // deliveryServiceRisk 新增，代表"供电不足导致的服务风险"
+    deliveryServiceRisk: { active: deliveryServiceActive, level: deliveryServiceLevel },
     powerRisk: { active: powerActive, level: powerLevel },
     energyRisk: { active: energyActive, level: energyLevel },
     storageRisk: { active: storageActive, level: storageLevel },
@@ -213,22 +236,43 @@ function buildScenarioPlans(base, diagnosis) {
   const energyDelta = ceilTo(Math.max(residualUnmet * 0.05, essBase * 0.35, storageRisk.active ? 100 : 0, energyRisk.active ? 75 : 0), 50);
   const pvDelta = ceilTo(Math.max(residualUnmet * 0.02, energyRisk.active ? pvBase * 0.10 : 0), 25);
 
-  const pileDelta = Math.max(1, Math.ceil(residualQueue / 600));
-  const matrixDelta = Math.max(2, Math.ceil(residualQueue / 900));
+  // S3 只在真实接入拥堵时加桩/矩阵，不受 residualUnmet 误导
+  const pileDelta = serviceRisk.active
+    ? Math.max(1, Math.ceil(residualQueue / 600))
+    : 0;
+  const matrixDelta = serviceRisk.active
+    ? Math.max(2, Math.ceil(residualQueue / 900))
+    : 0;
 
   const serviceDelta = routeKey === "traditional_pile"
-    ? { deltaN7: pileDelta, deltaN30: serviceRisk.active ? Math.max(0, Math.ceil(pileDelta / 2)) : 0, deltaMatrix: 0 }
-    : { deltaN7: 0, deltaN30: 0, deltaMatrix: matrixDelta };
+    ? {
+        deltaN7: pileDelta,
+        deltaN30: serviceRisk.active
+          ? Math.max(0, Math.ceil(pileDelta / 2))
+          : 0,
+        deltaMatrix: 0
+      }
+    : {
+        deltaN7: 0,
+        deltaN30: 0,
+        deltaMatrix: matrixDelta
+      };
 
-  // S4 deltas adapt to each risk's level instead of using fixed medium multipliers
+  // S4 纳入 storageRisk：SOC 风险也触发储能加固
   const s4Deltas = { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 };
 
   if (powerRisk.active && powerRisk.level) {
     s4Deltas.deltaPcsKw = applyPowerDeltaByLevel(powerDelta, powerRisk.level);
   }
-  if (energyRisk.active && energyRisk.level) {
-    s4Deltas.deltaStorageKwh = applyEnergyDeltaByLevel(energyDelta, energyRisk.level);
-    s4Deltas.deltaPvKw = applyEnergyDeltaByLevel(pvDelta, energyRisk.level);
+  if (
+    (energyRisk.active && energyRisk.level) ||
+    (storageRisk.active && storageRisk.level)
+  ) {
+    const combinedEnergyLevel = maxRiskLevel(energyRisk.level, storageRisk.level);
+    s4Deltas.deltaStorageKwh = applyEnergyDeltaByLevel(energyDelta, combinedEnergyLevel);
+    s4Deltas.deltaPvKw = energyRisk.active
+      ? applyEnergyDeltaByLevel(pvDelta, combinedEnergyLevel)
+      : 0;
   }
   if (serviceRisk.active && serviceRisk.level) {
     if (routeKey === "traditional_pile") {
@@ -239,37 +283,92 @@ function buildScenarioPlans(base, diagnosis) {
     }
   }
 
+  // 动态 intent 文案
+  const s1Intent = powerRisk.active
+    ? "针对并网功率越限或峰值功率瓶颈，优先增强 PCS / 功率支撑能力，压低运行边界风险。"
+    : "当前功率边界风险不突出，本方案保留为功率侧专项加固备选。";
+
+  const s2Intent =
+    energyRisk.active && storageRisk.active
+      ? "针对供电缺口与 SOC 安全边界双重风险，补充储能容量并辅以适度光伏增量。"
+      : energyRisk.active
+        ? "针对残余供电缺口，优先提升系统能量供给与日内搬移能力。"
+        : storageRisk.active
+          ? "针对最低 SOC 安全边界不足，优先补充储能韧性。"
+          : "当前能量风险不突出，本方案保留为能量侧专项加固备选。";
+
+  const s3Intent = serviceRisk.active
+    ? (
+        routeKey === "traditional_pile"
+          ? "围绕传统桩站路线，补充固定桩位服务能力，缓解排队与接入拥堵。"
+          : "围绕柔性调度路线，扩大矩阵接入能力，缓解排队与接入拥堵。"
+      )
+    : "当前接入型服务风险不突出，本方案不主动扩大充电接口。";
+
+  // triggerBasis 解释每个方案"为什么生成"
+  const s1TriggerBasis = [
+    powerRisk.active ? `功率风险等级：${powerRisk.level}` : null,
+    transformerGap > 0 ? `峰值超出变压器边界 ${round(transformerGap, 1)} kW` : null,
+    diagnosis.residualOverflowCount > 0
+      ? `残余越限次数 ${diagnosis.residualOverflowCount} 次`
+      : null
+  ].filter(Boolean);
+
+  const s2TriggerBasis = [
+    energyRisk.active ? `能量风险等级：${energyRisk.level}` : null,
+    storageRisk.active ? `SOC 风险等级：${storageRisk.level}` : null,
+    residualUnmet > 0 ? `残余未满足电量 ${round(residualUnmet, 1)} kWh` : null,
+    diagnosis.residualSocMinPct < 8
+      ? `最低 SOC ${diagnosis.residualSocMinPct}%`
+      : null
+  ].filter(Boolean);
+
+  const s3TriggerBasis = [
+    serviceRisk.active ? `接入型服务风险等级：${serviceRisk.level}` : null,
+    residualQueue > 0 ? `残余排队损失 ${round(residualQueue, 1)} kWh` : null
+  ].filter(Boolean);
+
+  const s4TriggerBasis = [
+    powerRisk.active ? `功率风险 ${powerRisk.level}` : null,
+    energyRisk.active ? `能量风险 ${energyRisk.level}` : null,
+    storageRisk.active ? `SOC 风险 ${storageRisk.level}` : null,
+    serviceRisk.active ? `接入服务风险 ${serviceRisk.level}` : null
+  ].filter(Boolean);
+
   return [
     {
       id: "S0",
       title: "S0 基准对照",
       intent: "不新增硬件，保留 M3 已选路线，作为所有加固方案的比较基线。",
+      triggerBasis: ["作为基准对照方案，不针对残余风险新增硬件。"],
       deltas: { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 }
     },
     {
       id: "S1",
       title: "S1 功率瓶颈加固",
-      intent: "优先加强 PCS / 功率支撑能力，用于压低峰值压力与运行功率瓶颈。",
+      intent: s1Intent,
+      triggerBasis: s1TriggerBasis.length > 0 ? s1TriggerBasis : ["无显著功率风险，保留为备选。"],
       deltas: { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: powerDelta, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 }
     },
     {
       id: "S2",
       title: "S2 储能韧性加固",
-      intent: "优先增加储能容量，并辅以适度光伏补量，提升能量韧性与 SOC 安全边界。",
+      intent: s2Intent,
+      triggerBasis: s2TriggerBasis.length > 0 ? s2TriggerBasis : ["无显著能量/SOC 风险，保留为备选。"],
       deltas: { deltaPvKw: pvDelta, deltaStorageKwh: energyDelta, deltaPcsKw: Math.min(powerDelta, 25), deltaN7: 0, deltaN30: 0, deltaMatrix: 0 }
     },
     {
       id: "S3",
       title: "S3 服务能力加固",
-      intent: routeKey === "traditional_pile"
-        ? "围绕传统桩站路线，补充固定桩位服务能力，缓解排队和放弃离场。"
-        : "围绕柔性调度路线，扩大矩阵接入能力，缓解服务侧拥堵。",
+      intent: s3Intent,
+      triggerBasis: s3TriggerBasis.length > 0 ? s3TriggerBasis : ["无显著接入拥堵，不扩大充电接口。"],
       deltas: { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, ...serviceDelta }
     },
     {
       id: "S4",
       title: "S4 综合平衡方案",
-      intent: "按实际残余风险等级自适应组合功率、能量与服务增量，避免一刀切中档配置。",
+      intent: "按实际残余风险等级自适应组合功率、能量/SOC 与服务增量，避免一刀切中档配置。",
+      triggerBasis: s4TriggerBasis.length > 0 ? s4TriggerBasis : ["无显著残余风险，保持基准配置。"],
       deltas: s4Deltas
     }
   ];
@@ -473,6 +572,7 @@ function isM4ScenarioFeasible(scenario) {
     (v.totalUnmetKwh || 0) <= 1 &&
     (v.totalQueueUnmetKwh || 0) <= 1 &&
     (m.socMinPct == null || m.socMinPct >= 8) &&
+    (v.monthsWithSocRisk || 0) <= 0 &&
     (v.serviceRate == null || v.serviceRate >= 0.99)
   );
 }

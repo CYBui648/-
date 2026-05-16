@@ -432,20 +432,23 @@ function runStressMonth(payload, routeKey) {
     : runTraditionalPileDispatch(payload);
 }
 
-function calcPVURProxy(annual) {
+function calcPVUR(annual) {
   const pvGen = safeNumber(annual.totalPvGen, 0);
   if (pvGen <= 0) return 0;
-  const estimatedCurtail = Math.max(0, safeNumber(annual.totalCurtailed, 0));
-  return clamp((pvGen - estimatedCurtail) / pvGen, 0, 1);
+  const curtailed = Math.max(0, safeNumber(annual.totalCurtailed, 0));
+  return clamp((pvGen - curtailed) / pvGen, 0, 1);
 }
 
-function calcGFFProxy(annual) {
-  const total = safeNumber(annual.totalGridPeak, 0) + safeNumber(annual.totalGridFlat, 0) + safeNumber(annual.totalGridValley, 0);
-  if (total <= 0) return 0;
-  const peakShare = safeNumber(annual.totalGridPeak, 0) / total;
-  const flatShare = safeNumber(annual.totalGridFlat, 0) / total;
-  const valleyShare = safeNumber(annual.totalGridValley, 0) / total;
-  return peakShare + flatShare - valleyShare;
+function calcGFF(annual) {
+  const peak = safeNumber(annual.totalGridPeak, 0);
+  const flat = safeNumber(annual.totalGridFlat, 0);
+  const valley = safeNumber(annual.totalGridValley, 0);
+  const total = peak + flat + valley;
+  if (total <= 0) return 1;
+  const peakShare = peak / total;
+  const flatShare = flat / total;
+  const gridBurdenScore = 1.0 * peakShare + 0.5 * flatShare;
+  return clamp(1 - gridBurdenScore, 0, 1);
 }
 
 function evaluateScenario(base, scenario) {
@@ -488,8 +491,8 @@ function evaluateScenario(base, scenario) {
       annualLcoeYuanPerKwh: round(annual.annualLCOE || 999, 3)
     },
     evaluationIndicators: {
-      pvurProxy: round(calcPVURProxy(annual), 4),
-      gffProxy: round(calcGFFProxy(annual), 4),
+      pvur: round(calcPVUR(annual), 4),
+      gff: round(calcGFF(annual), 4),
       annualLcoeYuanPerKwh: round(annual.annualLCOE || 999, 3)
     }
   };
@@ -520,8 +523,8 @@ function scoreScenarios(evaluated, weightsInput = {}) {
   const annualUnmetValues = evaluated.map(s => safeNumber(s.annualValidation.totalUnmetKwh, 0));
   const overflowValues = evaluated.map(s => safeNumber(s.annualValidation.totalOverflowCount, 0));
   const capexValues = evaluated.map(s => safeNumber(s.extraCapexWan, 0));
-  const gridValues = evaluated.map(s => safeNumber(s.evaluationIndicators.gffProxy, 0));
-  const pvValues = evaluated.map(s => safeNumber(s.evaluationIndicators.pvurProxy, 0));
+  const gridValues = evaluated.map(s => safeNumber(s.evaluationIndicators.gff, 0));
+  const pvValues = evaluated.map(s => safeNumber(s.evaluationIndicators.pvur, 0));
   const lcoeValues = evaluated.map(s => safeNumber(s.evaluationIndicators.annualLcoeYuanPerKwh, 999));
 
   const ranges = {
@@ -538,8 +541,8 @@ function scoreScenarios(evaluated, weightsInput = {}) {
     const overflowScore = normMin(safeNumber(scenario.annualValidation.totalOverflowCount, 0), ...ranges.overflow);
     const riskScore = 0.72 * unmetScore + 0.28 * overflowScore;
     const capexScore = normMin(safeNumber(scenario.extraCapexWan, 0), ...ranges.capex);
-    const gridScore = normMin(safeNumber(scenario.evaluationIndicators.gffProxy, 0), ...ranges.grid);
-    const pvScore = normMax(safeNumber(scenario.evaluationIndicators.pvurProxy, 0), ...ranges.pv);
+    const gridScore = normMax(safeNumber(scenario.evaluationIndicators.gff, 0), ...ranges.grid);
+    const pvScore = normMax(safeNumber(scenario.evaluationIndicators.pvur, 0), ...ranges.pv);
     const lcoeScore = normMin(safeNumber(scenario.evaluationIndicators.annualLcoeYuanPerKwh, 999), ...ranges.lcoe);
 
     const totalScore = (
@@ -624,14 +627,14 @@ export function runM4FinalPlanner(context) {
       selectedRouteKey: base.selectedRouteKey,
       selectedRouteLabel: base.selectedRoute.label,
       scenarioCount: scored.length,
-      evaluationNote: "本版已接入 S0~S4 方案生成、压力月复验、全年复验与综合评分。PVUR / GFF 目前为工程近似指标，后续可按文献公式进一步精修。"
+      evaluationNote: "本版已接入 S0~S4 方案生成、压力月复验、全年复验与综合评分。PVUR 与 GFF 已作为年度方案评价指标正式纳入推荐逻辑。"
     },
     residualDiagnosis: diagnosis,
     scenarios: scored,
     recommendation,
     metricInterpretation: {
-      pvurProxy: "PVUR 近似指标：基于全年光伏发电与估算弃光量得到，越高越好。",
-      gffProxy: "GFF 近似指标：基于峰/平/谷购电结构构造的电网友好性代理值，越低越好。",
+      pvur: "PVUR：年度光伏利用率，表示全年光伏发电中被系统有效利用的比例，越高越好。",
+      gff: "GFF：年度电网友好度，基于峰/平/谷购电结构计算；越少依赖峰段购电，数值越高。",
       lcoe: "年度单位服务成本，越低越好。"
     }
   };

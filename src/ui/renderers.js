@@ -742,8 +742,8 @@ function renderM4Summary(state) {
         <td>${formatNumber(scenario.extraCapexWan || 0, 2)} 万</td>
         <td>${formatNumber(scenario.annualValidation?.totalUnmetKwh || 0, 1)} kWh</td>
         <td>${scenario.annualValidation?.totalOverflowCount || 0}</td>
-        <td>${formatNumber((scenario.evaluationIndicators?.pvurProxy || 0) * 100, 1)}%</td>
-        <td>${formatNumber(scenario.evaluationIndicators?.gffProxy || 0, 3)}</td>
+        <td>${formatNumber((scenario.evaluationIndicators?.pvur || 0) * 100, 1)}%</td>
+        <td>${formatNumber(scenario.evaluationIndicators?.gff || 0, 3)}</td>
         <td>${formatNumber(scenario.evaluationIndicators?.annualLcoeYuanPerKwh || 0, 3)}</td>
         <td>${score}</td>
       </tr>

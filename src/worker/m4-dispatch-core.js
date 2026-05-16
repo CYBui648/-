@@ -363,10 +363,16 @@ function generateAlignedAnnualLedger(p, seed) {
 
 function writeBackFixedCarSoc(ev) {
   if (!ev?.car || ev.socWrittenBack) return;
+
   const delivered = Math.max(0, ev.deliveredEnergy || 0);
+  const v2gBorrowed = Math.max(0, ev.v2gBorrowed || 0);
   const capacity = Math.max(1, ev.car.capacity || 1);
+
+  // 净入车电量 = 站内累计交付 - 车辆经 V2G 向系统反送的电量
+  const netEnergyIntoCar = delivered - v2gBorrowed;
+
   ev.car.soc = clamp(
-    (ev.initSoc || 0) + delivered / capacity,
+    (ev.initSoc || 0) + netEnergyIntoCar / capacity,
     0.03,
     ev.targetSoc ?? 1.0
   );
@@ -431,9 +437,15 @@ function createAnnualDemandState(p, seed) {
     const dayStart = day * TICKS_PER_DAY;
 
     fixedFleet.forEach(car => {
-      if (random() > dayFactor) return;
+      // 每天先消耗日常出行电量，使全年 SOC 轨迹真正连续演化
       car.soc = clamp(car.soc - car.dailyEnergy / car.capacity, 0.03, 1.00);
+
+      // 今天是否来到站点
+      if (random() > dayFactor) return;
+
+      // SOC 低于阈值才生成充电事件
       if (car.soc > car.chargeThreshold) return;
+
       const targetSoc = clamp(randNormalLocal(car.targetSocBase, 0.035), 0.80, 1.00);
       const energyNeed = Math.max(car.dailyEnergy, car.capacity * Math.max(0, targetSoc - car.soc));
       const arriveHour = clamp(randNormalLocal(8.4, 0.55), 7, 10);

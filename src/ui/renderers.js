@@ -57,9 +57,19 @@ function renderButtons(state) {
     if (stage.status === "running") {
       button.textContent = "计算中...";
     } else if (stage.status === "done") {
-      button.textContent = key === "m1" ? "重新运行 M1 真实规划" : `重新运行 ${key.toUpperCase()}`;
+      button.textContent =
+        key === "m1" ? "重新运行 M1 真实规划" :
+        key === "m2" ? "重新运行 M2 压力测试" :
+        key === "m3" ? "重新运行 M3 双路线评估" :
+        key === "m4" ? "重新运行 M4 最终方案定型" :
+        `重新运行 ${key.toUpperCase()}`;
     } else {
-      button.textContent = key === "m1" ? "运行 M1 真实规划" : `运行 ${key.toUpperCase()} 占位任务`;
+      button.textContent =
+        key === "m1" ? "运行 M1 真实规划" :
+        key === "m2" ? "运行 M2 压力测试" :
+        key === "m3" ? "运行 M3 双路线评估" :
+        key === "m4" ? "运行 M4 最终方案定型" :
+        `运行 ${key.toUpperCase()}`;
     }
   });
 }
@@ -107,7 +117,8 @@ function renderRawResults(state) {
         summary: stage.result.summary,
         baselineFromM2: stage.result.baselineFromM2,
         routeOptions: stage.result.routeOptions,
-        selectedRoute: state.input.m3.selectedRoute || null
+        selectedRoute: state.input.m3.selectedRoute || null,
+        selectedAnnualValidation: stage.result.selectedAnnualValidation || null
       };
     } else if (key === "m4") {
       safeResult = {
@@ -209,6 +220,14 @@ function renderM3Summary(state) {
   const selectedRouteKey = state.input.m3.selectedRoute;
   const el = dom.m3Summary;
 
+  const resetAnnualSummary = () => {
+    el.annualMeta.textContent = "选择技术路线后，将自动执行全年 365 天连续调度验证。";
+    el.annualUnmet.textContent = "-- kWh";
+    el.annualService.textContent = "--%";
+    el.annualOverflowMonths.textContent = "--";
+    el.annualSocMonths.textContent = "--";
+  };
+
   if (m2?.riskReport) {
     el.baselineMonth.textContent = m2.summary?.monthName || "--";
     el.baselinePeak.textContent = `${formatNumber(m2.riskReport.realPeakKw, 1)} kW`;
@@ -244,6 +263,7 @@ function renderM3Summary(state) {
     el.selectedOverflow.textContent = "-- 次";
     el.tradCard?.classList.remove("selected");
     el.flexCard?.classList.remove("selected");
+    resetAnnualSummary();
     return;
   }
 
@@ -253,8 +273,8 @@ function renderM3Summary(state) {
 
   el.title.textContent = result.summary.title;
   el.meta.textContent = selectedRoute
-    ? `已选择：${selectedRoute.label}。M4 将沿该路线继续生成加固方案。`
-    : "两条路线均已评估，请结合项目场地与实施条件选择进入 M4 的路线。";
+    ? `已选择：${selectedRoute.label}。系统将先完成该路线全年连续验证，再进入 M4 工程方案定型。`
+    : "两条路线均已评估，请结合项目场地与实施条件选择进入 M3-B 全年验证。";
 
   el.tradPeak.textContent = `${formatNumber(traditional.result.realPeakKw, 1)} kW`;
   el.tradUnmet.textContent = `${formatNumber(traditional.result.unmetTotalKwh, 1)} kWh`;
@@ -278,6 +298,7 @@ function renderM3Summary(state) {
     el.selectedNeed.textContent = "--";
     el.selectedUnmet.textContent = "-- kWh";
     el.selectedOverflow.textContent = "-- 次";
+    resetAnnualSummary();
     return;
   }
 
@@ -286,6 +307,45 @@ function renderM3Summary(state) {
   el.selectedNeed.textContent = handoff.needsHardwareReinforcement ? "是" : "否";
   el.selectedUnmet.textContent = `${formatNumber(handoff.residualUnmetKwh, 1)} kWh`;
   el.selectedOverflow.textContent = `${handoff.residualOverflowCount} 次`;
+
+  // M3-B 所选路线全年连续验证摘要
+  const annualStatus = state.stages.m3.annualValidationStatus;
+  const annualError = state.stages.m3.annualValidationError;
+  const annualResult = result.selectedAnnualValidation;
+  const annual = annualResult?.annualValidation;
+
+  if (annualStatus === "running") {
+    el.annualMeta.textContent = `${selectedRoute.label} 已选择，正在执行全年 365 天连续调度验证……`;
+    el.annualUnmet.textContent = "-- kWh";
+    el.annualService.textContent = "--%";
+    el.annualOverflowMonths.textContent = "--";
+    el.annualSocMonths.textContent = "--";
+    return;
+  }
+
+  if (annualStatus === "error") {
+    el.annualMeta.textContent = `全年验证失败：${annualError || "未知错误"}`;
+    el.annualUnmet.textContent = "-- kWh";
+    el.annualService.textContent = "--%";
+    el.annualOverflowMonths.textContent = "--";
+    el.annualSocMonths.textContent = "--";
+    return;
+  }
+
+  if (!annual) {
+    el.annualMeta.textContent = `${selectedRoute.label} 已选择，等待执行全年连续验证。`;
+    el.annualUnmet.textContent = "-- kWh";
+    el.annualService.textContent = "--%";
+    el.annualOverflowMonths.textContent = "--";
+    el.annualSocMonths.textContent = "--";
+    return;
+  }
+
+  el.annualMeta.textContent = `${annualResult.selectedRouteLabel || selectedRoute.label} 全年连续验证已完成，M4 已可继续沿该路线进行工程方案定型。`;
+  el.annualUnmet.textContent = `${formatNumber(annual.totalUnmetKwh || 0, 1)} kWh`;
+  el.annualService.textContent = `${formatPercent(annual.serviceRate || 0, 1)}%`;
+  el.annualOverflowMonths.textContent = String(annual.monthsWithOverflow || 0);
+  el.annualSocMonths.textContent = String(annual.monthsWithSocRisk || 0);
 }
 
 
@@ -376,7 +436,7 @@ function renderM4Summary(state) {
     const mark = scenario.id === recommendation.recommendedScenarioId ? " ★" : "";
     return `
       <tr class="${scenario.id === recommendation.recommendedScenarioId ? "recommended-row" : ""}">
-        <td><strong>${scenario.id}${mark}</strong><small>${scenario.title.replace(/^S\\d\\s*/, "")}</small></td>
+        <td><strong>${scenario.id}${mark}</strong><small>${scenario.title.replace(/^S\d\s*/, "")}</small></td>
         <td>${formatNumber(scenario.extraCapexWan || 0, 2)} 万</td>
         <td>${formatNumber(scenario.annualValidation?.totalUnmetKwh || 0, 1)} kWh</td>
         <td>${scenario.annualValidation?.totalOverflowCount || 0}</td>

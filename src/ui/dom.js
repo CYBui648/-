@@ -82,7 +82,13 @@ m3Summary: {
   selectedRoute: document.getElementById("m3-selected-route"),
   selectedNeed: document.getElementById("m3-selected-need"),
   selectedUnmet: document.getElementById("m3-selected-unmet"),
-  selectedOverflow: document.getElementById("m3-selected-overflow")
+  selectedOverflow: document.getElementById("m3-selected-overflow"),
+
+  annualMeta: document.getElementById("m3-annual-meta"),
+  annualUnmet: document.getElementById("m3-annual-unmet"),
+  annualService: document.getElementById("m3-annual-service"),
+  annualOverflowMonths: document.getElementById("m3-annual-overflow-months"),
+  annualSocMonths: document.getElementById("m3-annual-soc-months")
   },
   m4Summary: {
   title: document.getElementById("m4-summary-title"),

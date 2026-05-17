@@ -70,6 +70,37 @@ export function buildBasePayload(context) {
     params.nMatrixP95 = safeNumber(matrixSizing.p95, params.nMatrix);
     params.nMatrixP99 = safeNumber(matrixSizing.p99, params.nMatrix);
     params.nMatrixMax = safeNumber(matrixSizing.max, params.nMatrix);
+
+    // P_matrix 继承：优先 M3-B 年度验证 matrixConfig，其次 M3-A sizing / summary
+    const annualMatrixConfig =
+      m3?.selectedAnnualValidation?.matrixConfig ?? {};
+    const flexMatrixSizing =
+      m3?.routeOptions?.flex_matrix?.matrixSizing ?? {};
+
+    const pMatrixKw =
+      annualMatrixConfig.pMatrixKw ??
+      flexMatrixSizing.recommendedPowerKw ??
+      m3?.summary?.pMatrixRecommendedKw ??
+      null;
+
+    if (Number.isFinite(pMatrixKw) && pMatrixKw > 0) {
+      params.pMatrixKw = pMatrixKw;
+      params.pMatrixP95Kw =
+        annualMatrixConfig.pMatrixP95Kw ??
+        flexMatrixSizing.powerP95Kw ??
+        m3?.summary?.pMatrixP95Kw ??
+        null;
+      params.pMatrixP99Kw =
+        annualMatrixConfig.pMatrixP99Kw ??
+        flexMatrixSizing.powerP99Kw ??
+        m3?.summary?.pMatrixP99Kw ??
+        null;
+      params.pMatrixMaxKw =
+        annualMatrixConfig.pMatrixMaxKw ??
+        flexMatrixSizing.powerMaxKw ??
+        m3?.summary?.pMatrixMaxKw ??
+        null;
+    }
   }
 
   const economics = {

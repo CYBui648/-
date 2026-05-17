@@ -533,6 +533,18 @@ function runFlexibleMatrixDispatch(payload) {
     let soc = cfg.E_storage * 0.2, socMin = 100, realPeak = 0, overflowCount = 0, unmetTotal = 0;
     let queueUnmet = 0, abandonedCount = 0; // matrix port queue losses
     let clippedEvSet = new Set(), v2gEvSet = new Set();
+
+    // N_matrix 接入端口拥堵诊断
+    let matrixQueuePeak = 0;
+    let matrixQueueTicks = 0;
+    let matrixQueueVehicleTicks = 0;
+
+    // P_matrix 功率池拥堵诊断
+    let pMatrixLimitedTicks = 0;
+    let pMatrixLimitedEnergyKwh = 0;
+    let pMatrixMaxGapKw = 0;
+    let pMatrixRawPeakKw = 0;
+
     let v2gEnergy = 0, eBuyValley = 0, eBuyFlat = 0, eBuyPeak = 0, deliveredEnergy = 0, totalPvGen = 0, totalCurtailed = 0;
     let activePeak = 0, readyPeak = 0;
     const demandSeries = new Float32Array(totalTicks);
@@ -542,8 +554,16 @@ function runFlexibleMatrixDispatch(payload) {
     const pvSeries = new Float32Array(totalTicks);
     const limitSeries = new Float32Array(totalTicks);
 
-    // N_matrix port constraint for flexible matrix
+    // N_matrix：柔性矩阵可同时接入的终端数
     const nMatrix = p.nMatrix || (cfg.n7 + cfg.n30);
+
+    // P_matrix：柔性矩阵共享功率池容量。
+    // 若未传入，则视为"不额外施加矩阵功率池上限"，用于 sizing probe。
+    const pMatrixKw =
+      Number.isFinite(Number(p.pMatrixKw)) && Number(p.pMatrixKw) > 0
+        ? Number(p.pMatrixKw)
+        : Number.POSITIVE_INFINITY;
+
     const connected = [];      // vehicles occupying a matrix port
     const matrixQueue = [];    // vehicles arrived but waiting for a port
 
@@ -608,14 +628,51 @@ function runFlexibleMatrixDispatch(payload) {
       readyPeak = Math.max(readyPeak, ready.length);
       activeSeries[tick] = plugged.length + matrixQueue.length;
 
+      // N_matrix 接口拥堵诊断
+      if (matrixQueue.length > 0) {
+        matrixQueueTicks++;
+        matrixQueueVehicleTicks += matrixQueue.length;
+        matrixQueuePeak = Math.max(matrixQueuePeak, matrixQueue.length);
+      }
+
       // Power allocation: all vehicles request max feasible power first;
       // urgency controls who gets clipped first during soft limiting below
       ready.forEach(ev => {
-        const remainingNeed = ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0);
-        ev.currentPower = Math.min(ev.maxPower, Math.max(0, remainingNeed / 0.25));
+        const remainingNeed =
+          ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0);
+
+        ev.currentPower = Math.min(
+          ev.maxPower,
+          Math.max(0, remainingNeed / 0.25)
+        );
       });
+
       let totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+
+      // 记录"矩阵功率池约束之前"的原始柔性需求。
       rawDemandSeries[tick] = totalDemand;
+      pMatrixRawPeakKw = Math.max(pMatrixRawPeakKw, totalDemand);
+
+      // P_matrix 功率池拥堵诊断：先记账
+      if (Number.isFinite(pMatrixKw) && totalDemand > pMatrixKw) {
+        const pMatrixGapKw = totalDemand - pMatrixKw;
+
+        pMatrixLimitedTicks++;
+        pMatrixLimitedEnergyKwh += pMatrixGapKw * 0.25;
+        pMatrixMaxGapKw = Math.max(pMatrixMaxGapKw, pMatrixGapKw);
+      }
+
+      // P_matrix 限制：再执行比例压缩
+      if (Number.isFinite(pMatrixKw) && totalDemand > pMatrixKw) {
+        const ratio = pMatrixKw / Math.max(totalDemand, 1);
+
+        ready.forEach(ev => {
+          if (ev.currentPower <= 0) return;
+          ev.currentPower *= ratio;
+        });
+
+        totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+      }
 
       const softLimit = cfg.transformerLimit * p.clipThreshold;
       const computeUrgency = (ev) => {
@@ -735,7 +792,27 @@ function runFlexibleMatrixDispatch(payload) {
     const lcoe = (cfg.baseCapexYuan + opexYear * 20) / (deliveredYear * 20);
     return {
       mode: 'flex_matrix',
-      realPeak, overflowCount, unmetTotal, queueUnmet, abandonedCount, deliveredEnergy, eBuyValley, eBuyFlat, eBuyPeak,
+
+      realPeak,
+      overflowCount,
+      unmetTotal,
+
+      // 既有接口损失指标
+      queueUnmet,
+      abandonedCount,
+
+      // N_matrix 接入端口拥堵诊断
+      matrixQueuePeak,
+      matrixQueueTicks,
+      matrixQueueVehicleTicks,
+
+      // P_matrix 功率池拥堵诊断
+      pMatrixLimitedTicks,
+      pMatrixLimitedEnergyKwh,
+      pMatrixMaxGapKw,
+      pMatrixRawPeakKw,
+
+      deliveredEnergy, eBuyValley, eBuyFlat, eBuyPeak,
       shiftedCount, avgDelayHours: shiftedCount > 0 ? delayTicksTotal / shiftedCount / 4 : 0,
       clippedCount: clippedEvSet.size, v2gCount: v2gEvSet.size, v2gEnergy,
       activePeak, readyPeak,
@@ -811,6 +888,18 @@ function runFlexibleMatrixAnnualDispatch(payload) {
       deliveredEnergy: 0,
       queueUnmet: 0,
       abandonedCount: 0,
+
+      // N_matrix 接入端口拥堵诊断
+      matrixQueuePeak: 0,
+      matrixQueueTicks: 0,
+      matrixQueueVehicleTicks: 0,
+
+      // P_matrix 功率池拥堵诊断
+      pMatrixLimitedTicks: 0,
+      pMatrixLimitedEnergyKwh: 0,
+      pMatrixMaxGapKw: 0,
+      pMatrixRawPeakKw: 0,
+
       curtailmentEnergy: 0,
       pvGenEnergy: 0,
       shiftedCount: 0,
@@ -824,6 +913,18 @@ function runFlexibleMatrixAnnualDispatch(payload) {
 
     let soc = cfg.E_storage * 0.2, socMin = 100, realPeak = 0, overflowCount = 0, unmetTotal = 0;
     let queueUnmet = 0, abandonedCount = 0;
+
+    // N_matrix 接入端口拥堵诊断（年度级）
+    let matrixQueuePeak = 0;
+    let matrixQueueTicks = 0;
+    let matrixQueueVehicleTicks = 0;
+
+    // P_matrix 功率池拥堵诊断（年度级）
+    let pMatrixLimitedTicks = 0;
+    let pMatrixLimitedEnergyKwh = 0;
+    let pMatrixMaxGapKw = 0;
+    let pMatrixRawPeakKw = 0;
+
     let clippedEvSet = new Set(), v2gEvSet = new Set();
     let v2gEnergy = 0, eBuyValley = 0, eBuyFlat = 0, eBuyPeak = 0, deliveredEnergy = 0, totalPvGen = 0, totalCurtailed = 0;
     let activePeak = 0, readyPeak = 0;
@@ -835,6 +936,14 @@ function runFlexibleMatrixAnnualDispatch(payload) {
     const limitSeries = new Float32Array(totalTicks);
 
     const nMatrix = p.nMatrix || (cfg.n7 + cfg.n30);
+
+    // P_matrix：柔性矩阵共享功率池容量。
+    // 若未传入，则视为"不额外施加矩阵功率池上限"，用于 sizing probe。
+    const pMatrixKw =
+      Number.isFinite(Number(p.pMatrixKw)) && Number(p.pMatrixKw) > 0
+        ? Number(p.pMatrixKw)
+        : Number.POSITIVE_INFINITY;
+
     const connected = [];
     const matrixQueue = [];
 
@@ -919,12 +1028,68 @@ function runFlexibleMatrixAnnualDispatch(payload) {
       readyPeak = Math.max(readyPeak, ready.length);
       activeSeries[tick] = plugged.length + matrixQueue.length;
 
+      // N_matrix 接口拥堵诊断（年度级 + 月度桶）
+      if (matrixQueue.length > 0) {
+        matrixQueueTicks++;
+        matrixQueueVehicleTicks += matrixQueue.length;
+        matrixQueuePeak = Math.max(matrixQueuePeak, matrixQueue.length);
+
+        monthStat.matrixQueueTicks++;
+        monthStat.matrixQueueVehicleTicks += matrixQueue.length;
+        monthStat.matrixQueuePeak = Math.max(
+          monthStat.matrixQueuePeak,
+          matrixQueue.length
+        );
+      }
+
       ready.forEach(ev => {
-        const remainingNeed = ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0);
-        ev.currentPower = Math.min(ev.maxPower, Math.max(0, remainingNeed / 0.25));
+        const remainingNeed =
+          ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0);
+
+        ev.currentPower = Math.min(
+          ev.maxPower,
+          Math.max(0, remainingNeed / 0.25)
+        );
       });
+
       let totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+
+      // 记录"矩阵功率池约束之前"的原始柔性需求。
       rawDemandSeries[tick] = totalDemand;
+
+      // P_matrix 功率池拥堵诊断（年度级 + 月度桶）：先记账
+      pMatrixRawPeakKw = Math.max(pMatrixRawPeakKw, totalDemand);
+      monthStat.pMatrixRawPeakKw = Math.max(
+        monthStat.pMatrixRawPeakKw,
+        totalDemand
+      );
+
+      if (Number.isFinite(pMatrixKw) && totalDemand > pMatrixKw) {
+        const pMatrixGapKw = totalDemand - pMatrixKw;
+
+        pMatrixLimitedTicks++;
+        pMatrixLimitedEnergyKwh += pMatrixGapKw * 0.25;
+        pMatrixMaxGapKw = Math.max(pMatrixMaxGapKw, pMatrixGapKw);
+
+        monthStat.pMatrixLimitedTicks++;
+        monthStat.pMatrixLimitedEnergyKwh += pMatrixGapKw * 0.25;
+        monthStat.pMatrixMaxGapKw = Math.max(
+          monthStat.pMatrixMaxGapKw,
+          pMatrixGapKw
+        );
+      }
+
+      // P_matrix 限制：再执行比例压缩
+      if (Number.isFinite(pMatrixKw) && totalDemand > pMatrixKw) {
+        const ratio = pMatrixKw / Math.max(totalDemand, 1);
+
+        ready.forEach(ev => {
+          if (ev.currentPower <= 0) return;
+          ev.currentPower *= ratio;
+        });
+
+        totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+      }
 
       const softLimit = cfg.transformerLimit * p.clipThreshold;
       const computeUrgency = (ev) => {
@@ -1073,6 +1238,16 @@ function runFlexibleMatrixAnnualDispatch(payload) {
       deliveredEnergy: ms.deliveredEnergy,
       queueUnmet: ms.queueUnmet,
       abandonedCount: ms.abandonedCount,
+
+      matrixQueuePeak: ms.matrixQueuePeak,
+      matrixQueueTicks: ms.matrixQueueTicks,
+      matrixQueueVehicleTicks: ms.matrixQueueVehicleTicks,
+
+      pMatrixLimitedTicks: ms.pMatrixLimitedTicks,
+      pMatrixLimitedEnergyKwh: ms.pMatrixLimitedEnergyKwh,
+      pMatrixMaxGapKw: ms.pMatrixMaxGapKw,
+      pMatrixRawPeakKw: ms.pMatrixRawPeakKw,
+
       curtailmentEnergy: ms.curtailmentEnergy,
       pvGenEnergy: ms.pvGenEnergy,
       curtailmentRate: ms.pvGenEnergy > 0 ? ms.curtailmentEnergy / ms.pvGenEnergy * 100 : 0,
@@ -1116,6 +1291,16 @@ function runFlexibleMatrixAnnualDispatch(payload) {
       totalShifted: monthlyResults.reduce((s, r) => s + r.shiftedCount, 0),
       totalClipped: monthlyResults.reduce((s, r) => s + r.clippedCount, 0),
       totalAbandoned: monthlyResults.reduce((s, r) => s + r.abandonedCount, 0),
+
+      totalMatrixQueueTicks: monthlyResults.reduce((s, r) => s + r.matrixQueueTicks, 0),
+      totalMatrixQueueVehicleTicks: monthlyResults.reduce((s, r) => s + r.matrixQueueVehicleTicks, 0),
+      maxMatrixQueuePeak: Math.max(...monthlyResults.map(r => r.matrixQueuePeak || 0), 0),
+
+      totalPMatrixLimitedTicks: monthlyResults.reduce((s, r) => s + r.pMatrixLimitedTicks, 0),
+      totalPMatrixLimitedEnergyKwh: monthlyResults.reduce((s, r) => s + r.pMatrixLimitedEnergyKwh, 0),
+      maxPMatrixGapKw: Math.max(...monthlyResults.map(r => r.pMatrixMaxGapKw || 0), 0),
+      maxPMatrixRawPeakKw: Math.max(...monthlyResults.map(r => r.pMatrixRawPeakKw || 0), 0),
+
       totalDemand: annualDemand,
       serviceRate: annualDemand > 0 ? annualDeliveredTotal / annualDemand : 0,
       maxPeak: Math.max(...monthlyResults.map(r => r.realPeak), 0),

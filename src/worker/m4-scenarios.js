@@ -45,16 +45,18 @@ export function buildScenarioPlans(base, diagnosis) {
   const energyRisk = diagnosis.energyRisk || {};
   const serviceRisk = diagnosis.serviceRisk || {};
   const storageRisk = diagnosis.storageRisk || {};
+  const accessPortRisk = diagnosis.accessPortRisk || {};
+  const matrixPowerRisk = diagnosis.matrixPowerRisk || {};
 
   const powerDelta = ceilTo(Math.max(transformerGap * 0.9, pcsBase * 0.25, powerRisk.active ? 25 : 0), 25);
   const energyDelta = ceilTo(Math.max(residualUnmet * 0.05, essBase * 0.35, storageRisk.active ? 100 : 0, energyRisk.active ? 75 : 0), 50);
   const pvDelta = ceilTo(Math.max(residualUnmet * 0.02, energyRisk.active ? pvBase * 0.10 : 0), 25);
 
-  // S3 只在真实接入拥堵时加桩/矩阵，不受 residualUnmet 误导
-  const pileDelta = serviceRisk.active
+  // S3 只在真实接口拥堵(accessPortRisk)时加桩/矩阵，不受 residualUnmet 或功率池堵误导
+  const pileDelta = accessPortRisk.active
     ? Math.max(1, Math.ceil(residualQueue / 600))
     : 0;
-  const matrixDelta = serviceRisk.active
+  const matrixDelta = accessPortRisk.active
     ? Math.max(2, Math.ceil(residualQueue / 900))
     : 0;
 
@@ -88,12 +90,18 @@ export function buildScenarioPlans(base, diagnosis) {
       ? applyEnergyDeltaByLevel(pvDelta, combinedEnergyLevel)
       : 0;
   }
-  if (serviceRisk.active && serviceRisk.level) {
-    if (routeKey === "traditional_pile") {
+  // S4 服务扩容：传统桩看 serviceRisk，柔性矩阵只看 accessPortRisk
+  if (routeKey === "traditional_pile") {
+    if (serviceRisk.active && serviceRisk.level) {
       s4Deltas.deltaN7 = applyServiceDeltaByLevel(serviceDelta.deltaN7, serviceRisk.level);
       s4Deltas.deltaN30 = applyServiceDeltaByLevel(serviceDelta.deltaN30, serviceRisk.level);
-    } else {
-      s4Deltas.deltaMatrix = applyServiceDeltaByLevel(serviceDelta.deltaMatrix, serviceRisk.level);
+    }
+  } else {
+    if (accessPortRisk.active && accessPortRisk.level) {
+      s4Deltas.deltaMatrix = applyServiceDeltaByLevel(
+        serviceDelta.deltaMatrix,
+        accessPortRisk.level
+      );
     }
   }
 
@@ -111,13 +119,13 @@ export function buildScenarioPlans(base, diagnosis) {
           ? "针对最低 SOC 安全边界不足，优先补充储能韧性。"
           : "当前能量风险不突出，本方案保留为能量侧专项加固备选。";
 
-  const s3Intent = serviceRisk.active
+  const s3Intent = accessPortRisk.active
     ? (
         routeKey === "traditional_pile"
           ? "围绕传统桩站路线，补充固定桩位服务能力，缓解排队与接入拥堵。"
-          : "围绕柔性调度路线，扩大矩阵接入能力，缓解排队与接入拥堵。"
+          : "围绕柔性调度路线，针对矩阵端口接入拥堵扩大 N_matrix，缓解车辆排队与接口不足。"
       )
-    : "当前接入型服务风险不突出，本方案不主动扩大充电接口。";
+    : "当前接口拥堵风险不突出，本方案不主动扩大充电接口。";
 
   // triggerBasis 解释每个方案"为什么生成"
   const s1TriggerBasis = [
@@ -138,7 +146,7 @@ export function buildScenarioPlans(base, diagnosis) {
   ].filter(Boolean);
 
   const s3TriggerBasis = [
-    serviceRisk.active ? `接入型服务风险等级：${serviceRisk.level}` : null,
+    accessPortRisk.active ? `接口拥堵风险等级：${accessPortRisk.level}` : null,
     residualQueue > 0 ? `残余排队损失 ${round(residualQueue, 1)} kWh` : null
   ].filter(Boolean);
 
@@ -146,7 +154,9 @@ export function buildScenarioPlans(base, diagnosis) {
     powerRisk.active ? `功率风险 ${powerRisk.level}` : null,
     energyRisk.active ? `能量风险 ${energyRisk.level}` : null,
     storageRisk.active ? `SOC 风险 ${storageRisk.level}` : null,
-    serviceRisk.active ? `接入服务风险 ${serviceRisk.level}` : null
+    serviceRisk.active ? `接入服务风险 ${serviceRisk.level}` : null,
+    accessPortRisk.active ? `接口拥堵风险 ${accessPortRisk.level}` : null,
+    matrixPowerRisk.active ? `功率池拥堵风险 ${matrixPowerRisk.level}` : null
   ].filter(Boolean);
 
   return [

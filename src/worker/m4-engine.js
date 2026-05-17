@@ -76,6 +76,13 @@ function materializeScenarioPayload(base, scenario, extraCapexWan) {
     params.nMatrixP95 = Math.max(safeNumber(base.params.nMatrixP95, params.nMatrix), params.nMatrix);
     params.nMatrixP99 = Math.max(safeNumber(base.params.nMatrixP99, params.nMatrix), params.nMatrix);
     params.nMatrixMax = Math.max(safeNumber(base.params.nMatrixMax, params.nMatrix), params.nMatrix);
+
+    // P_matrix 固定继承：候选方案阶段不优化功率池，
+    // 统一沿用 M3 已验证的 pMatrixKw，避免评估口径漂移。
+    params.pMatrixKw = base.params.pMatrixKw ?? null;
+    params.pMatrixP95Kw = base.params.pMatrixP95Kw ?? null;
+    params.pMatrixP99Kw = base.params.pMatrixP99Kw ?? null;
+    params.pMatrixMaxKw = base.params.pMatrixMaxKw ?? null;
   }
 
   return {
@@ -127,7 +134,8 @@ function evaluateScenario(base, scenario) {
       pcsKw: round(payload.config.P_storage, 1),
       n7kw: payload.config.n7,
       n30kw: payload.config.n30,
-      nMatrix: base.selectedRouteKey === "flex_matrix" ? safeNumber(payload.params.nMatrix, 0) : null
+      nMatrix: base.selectedRouteKey === "flex_matrix" ? safeNumber(payload.params.nMatrix, 0) : null,
+      pMatrixKw: base.selectedRouteKey === "flex_matrix" ? safeNumber(payload.params.pMatrixKw, 0) || null : null
     },
     stressMonth: {
       realPeakKw: round(monthResult.realPeak || 0, 1),
@@ -135,13 +143,31 @@ function evaluateScenario(base, scenario) {
       unmetTotalKwh: round(monthResult.unmetTotal || 0, 1),
       queueUnmetKwh: round(monthResult.queueUnmet || 0, 1),
       socMinPct: round(monthResult.socMin || 100, 1),
-      abandonedCount: monthResult.abandonedCount || 0
+      abandonedCount: monthResult.abandonedCount || 0,
+
+      matrixQueuePeak: monthResult.matrixQueuePeak || 0,
+      matrixQueueTicks: monthResult.matrixQueueTicks || 0,
+      matrixQueueVehicleTicks: monthResult.matrixQueueVehicleTicks || 0,
+
+      pMatrixLimitedTicks: monthResult.pMatrixLimitedTicks || 0,
+      pMatrixLimitedEnergyKwh: round(monthResult.pMatrixLimitedEnergyKwh || 0, 1),
+      pMatrixMaxGapKw: round(monthResult.pMatrixMaxGapKw || 0, 1),
+      pMatrixRawPeakKw: round(monthResult.pMatrixRawPeakKw || 0, 1)
     },
     annualValidation: {
       totalUnmetKwh: round(annual.totalUnmet || 0, 1),
       totalQueueUnmetKwh: round(annual.totalQueueUnmet || 0, 1),
       totalOverflowCount: annual.totalOverflow || 0,
       serviceRate: round(annual.serviceRate || 0, 4),
+
+      totalMatrixQueueTicks: annual.totalMatrixQueueTicks || 0,
+      totalMatrixQueueVehicleTicks: annual.totalMatrixQueueVehicleTicks || 0,
+      maxMatrixQueuePeak: annual.maxMatrixQueuePeak || 0,
+
+      totalPMatrixLimitedTicks: annual.totalPMatrixLimitedTicks || 0,
+      totalPMatrixLimitedEnergyKwh: round(annual.totalPMatrixLimitedEnergyKwh || 0, 1),
+      maxPMatrixGapKw: round(annual.maxPMatrixGapKw || 0, 1),
+      maxPMatrixRawPeakKw: round(annual.maxPMatrixRawPeakKw || 0, 1),
       monthsWithOverflow: annual.monthsWithOverflow || 0,
       monthsWithSocRisk: annual.monthsWithSocRisk || 0,
       totalDeliveredKwh: round(annual.totalDelivered || 0, 1),

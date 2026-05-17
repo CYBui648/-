@@ -15,6 +15,11 @@ function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
 
+function ceilTo(value, step) {
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return Math.ceil(value / step) * step;
+  }
+
 function percentile(values, p) {
     if (!values.length) return 0;
     const sorted = [...values].sort((a, b) => a - b);
@@ -262,6 +267,17 @@ function runFlexibleMatrixDispatch(payload) {
     let soc = cfg.E_storage * 0.2, socMin = 100, realPeak = 0, overflowCount = 0, unmetTotal = 0;
     let queueUnmet = 0, abandonedCount = 0; // matrix port queue losses
     let clippedEvSet = new Set(), v2gEvSet = new Set();
+
+    // N_matrix 接入端口拥堵诊断
+    let matrixQueuePeak = 0;
+    let matrixQueueTicks = 0;
+    let matrixQueueVehicleTicks = 0;
+
+    // P_matrix 功率池拥堵诊断
+    let pMatrixLimitedTicks = 0;
+    let pMatrixLimitedEnergyKwh = 0;
+    let pMatrixMaxGapKw = 0;
+    let pMatrixRawPeakKw = 0;
     let v2gEnergy = 0, eBuyValley = 0, eBuyFlat = 0, eBuyPeak = 0, deliveredEnergy = 0, totalPvGen = 0, totalCurtailed = 0;
     let activePeak = 0, readyPeak = 0;
     const demandSeries = new Float32Array(totalTicks);
@@ -271,8 +287,16 @@ function runFlexibleMatrixDispatch(payload) {
     const pvSeries = new Float32Array(totalTicks);
     const limitSeries = new Float32Array(totalTicks);
 
-    // N_matrix port constraint for flexible matrix
+    // N_matrix：柔性矩阵可同时接入的终端数
     const nMatrix = p.nMatrix || (cfg.n7 + cfg.n30);
+
+    // P_matrix：柔性矩阵共享功率池容量。
+    // 若未传入，则视为"不额外施加矩阵功率池上限"，用于 sizing probe。
+    const pMatrixKw =
+      Number.isFinite(Number(p.pMatrixKw)) && Number(p.pMatrixKw) > 0
+        ? Number(p.pMatrixKw)
+        : Number.POSITIVE_INFINITY;
+
     const connected = [];      // vehicles occupying a matrix port
     const matrixQueue = [];    // vehicles arrived but waiting for a port
 
@@ -337,14 +361,52 @@ function runFlexibleMatrixDispatch(payload) {
       readyPeak = Math.max(readyPeak, ready.length);
       activeSeries[tick] = plugged.length + matrixQueue.length;
 
+      // N_matrix 接口拥堵诊断
+      if (matrixQueue.length > 0) {
+        matrixQueueTicks++;
+        matrixQueueVehicleTicks += matrixQueue.length;
+        matrixQueuePeak = Math.max(matrixQueuePeak, matrixQueue.length);
+      }
+
       // Power allocation: all vehicles request max feasible power first;
       // urgency controls who gets clipped first during soft limiting below
       ready.forEach(ev => {
-        const remainingNeed = ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0);
-        ev.currentPower = Math.min(ev.maxPower, Math.max(0, remainingNeed / 0.25));
+        const remainingNeed =
+          ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0);
+
+        ev.currentPower = Math.min(
+          ev.maxPower,
+          Math.max(0, remainingNeed / 0.25)
+        );
       });
+
       let totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+
+      // 记录"矩阵功率池约束之前"的原始柔性需求。
+      // 后续 M3-A 的 P_matrix sizing 就基于它做分位数推荐。
       rawDemandSeries[tick] = totalDemand;
+      pMatrixRawPeakKw = Math.max(pMatrixRawPeakKw, totalDemand);
+
+      // P_matrix 功率池拥堵诊断：先记账
+      if (Number.isFinite(pMatrixKw) && totalDemand > pMatrixKw) {
+        const pMatrixGapKw = totalDemand - pMatrixKw;
+
+        pMatrixLimitedTicks++;
+        pMatrixLimitedEnergyKwh += pMatrixGapKw * 0.25;
+        pMatrixMaxGapKw = Math.max(pMatrixMaxGapKw, pMatrixGapKw);
+      }
+
+      // P_matrix 限制：再执行比例压缩
+      if (Number.isFinite(pMatrixKw) && totalDemand > pMatrixKw) {
+        const ratio = pMatrixKw / Math.max(totalDemand, 1);
+
+        ready.forEach(ev => {
+          if (ev.currentPower <= 0) return;
+          ev.currentPower *= ratio;
+        });
+
+        totalDemand = ready.reduce((sum, ev) => sum + ev.currentPower, 0);
+      }
 
       const softLimit = cfg.transformerLimit * p.clipThreshold;
       const computeUrgency = (ev) => {
@@ -464,7 +526,27 @@ function runFlexibleMatrixDispatch(payload) {
     const lcoe = (cfg.baseCapexYuan + opexYear * 20) / (deliveredYear * 20);
     return {
       mode: 'flex_matrix',
-      realPeak, overflowCount, unmetTotal, queueUnmet, abandonedCount, deliveredEnergy, eBuyValley, eBuyFlat, eBuyPeak,
+
+      realPeak,
+      overflowCount,
+      unmetTotal,
+
+      // 既有接口损失指标
+      queueUnmet,
+      abandonedCount,
+
+      // N_matrix 接入端口拥堵诊断
+      matrixQueuePeak,
+      matrixQueueTicks,
+      matrixQueueVehicleTicks,
+
+      // P_matrix 功率池拥堵诊断
+      pMatrixLimitedTicks,
+      pMatrixLimitedEnergyKwh,
+      pMatrixMaxGapKw,
+      pMatrixRawPeakKw,
+
+      deliveredEnergy, eBuyValley, eBuyFlat, eBuyPeak,
       shiftedCount, avgDelayHours: shiftedCount > 0 ? delayTicksTotal / shiftedCount / 4 : 0,
       clippedCount: clippedEvSet.size, v2gCount: v2gEvSet.size, v2gEnergy,
       activePeak, readyPeak,
@@ -711,6 +793,52 @@ function runDispatchAssessment(payload) {
     const nMatrixMax = Math.max(fixedMax, dailyAccessMatrix);
     const nMatrix = Math.max(nMatrixP99, basePayload.config.n7 + basePayload.config.n30);
 
+    // 第一次：柔性矩阵 sizing probe
+    // 不给 pMatrixKw 限制，让系统暴露原始柔性功率需求曲线。
+    // 这个 probe 只用于反推 P_matrix 推荐规模。
+    const flexiblePowerSizingProbe = runFlexibleMatrixDispatch({
+      ...basePayload,
+      params: {
+        ...basePayload.params,
+        dispatchMode: 'flex_matrix',
+        usePricing: true,
+        useClipping: true,
+        useV2G: basePayload.params.useV2G,
+        nMatrix,
+        nMatrixP95,
+        nMatrixP99,
+        nMatrixMax,
+        pMatrixKw: Number.POSITIVE_INFINITY
+      }
+    });
+
+    const flexibleRawDemand =
+      flexiblePowerSizingProbe.chartData?.rawDemand || [];
+
+    const pMatrixP95Kw = ceilTo(
+      percentile(flexibleRawDemand, 0.95),
+      25
+    );
+
+    const pMatrixP99Kw = ceilTo(
+      percentile(flexibleRawDemand, 0.99),
+      25
+    );
+
+    const pMatrixMaxKw = ceilTo(
+      flexibleRawDemand.length > 0
+        ? Math.max(...flexibleRawDemand)
+        : 0,
+      25
+    );
+
+    // M3-A 是路线评估，不是最终经济优化。
+    // 这里先用 P99 作为推荐功率池规模，避免把柔性路线因为功率池过早压小而评估偏弱。
+    // 真正的 P_matrix 优化放到后续 M4 多目标寻优。
+    const pMatrixRecommendedKw = pMatrixP99Kw;
+
+    // 第二次：正式柔性路线评估
+    // 使用推荐的 P_matrix 做压力月技术路线评估。
     const flexible = runFlexibleMatrixDispatch({
       ...basePayload,
       params: {
@@ -719,12 +847,17 @@ function runDispatchAssessment(payload) {
         usePricing: true,
         useClipping: true,
         useV2G: basePayload.params.useV2G,
-        nMatrix: nMatrix,
-        nMatrixP95: nMatrixP95,
-        nMatrixP99: nMatrixP99,
-        nMatrixMax: nMatrixMax
+        nMatrix,
+        nMatrixP95,
+        nMatrixP99,
+        nMatrixMax,
+        pMatrixKw: pMatrixRecommendedKw,
+        pMatrixP95Kw,
+        pMatrixP99Kw,
+        pMatrixMaxKw
       }
     });
+
     traditional.residual = summarizeDispatchResidual(traditional, payload.baseline?.m2);
     flexible.residual = summarizeDispatchResidual(flexible, payload.baseline?.m2);
     const preferred = flexible.residual.needsHardwareReinforcement
@@ -735,12 +868,19 @@ function runDispatchAssessment(payload) {
       traditional,
       flexible,
       preferred,
-      nMatrix: nMatrix,
-      nMatrixP95: nMatrixP95,
-      nMatrixP99: nMatrixP99,
-      nMatrixMax: nMatrixMax,
+
+      nMatrix,
+      nMatrixP95,
+      nMatrixP99,
+      nMatrixMax,
       nMatrixDailyAccess: dailyAccessMatrix,
-      dailyAccessDemand: dailyAccessDemand,
+      dailyAccessDemand,
+
+      pMatrixRecommendedKw,
+      pMatrixP95Kw,
+      pMatrixP99Kw,
+      pMatrixMaxKw,
+
       baseline: payload.baseline || null
     };
   }
@@ -855,6 +995,18 @@ function summarizeRoute(result) {
     queueUnmetKwh: round(result?.queueUnmet || 0, 1),
     abandonedCount: result?.abandonedCount || 0,
     socMinPct: round(result?.socMin || 0, 1),
+
+    // 柔性矩阵接口拥堵诊断
+    matrixQueuePeak: result?.matrixQueuePeak || 0,
+    matrixQueueTicks: result?.matrixQueueTicks || 0,
+    matrixQueueVehicleTicks: result?.matrixQueueVehicleTicks || 0,
+
+    // 柔性矩阵功率池拥堵诊断
+    pMatrixLimitedTicks: result?.pMatrixLimitedTicks || 0,
+    pMatrixLimitedEnergyKwh: round(result?.pMatrixLimitedEnergyKwh || 0, 1),
+    pMatrixMaxGapKw: round(result?.pMatrixMaxGapKw || 0, 1),
+    pMatrixRawPeakKw: round(result?.pMatrixRawPeakKw || 0, 1),
+
     shiftedCount: result?.shiftedCount || 0,
     clippedCount: result?.clippedCount || 0,
     v2gEnergyKwh: round(result?.v2gEnergy || 0, 1),
@@ -896,12 +1048,19 @@ function mapToM3Result(raw, payload, m2Result) {
     contract: "M3Result",
     summary: {
       title: "双路线调度评估已完成",
-      positioning: "M3 并列展示传统桩站调度与柔性调度两条可落地路线，不自动替用户做技术路线选择。",
+      positioning:
+        "M3 并列展示传统桩站调度与柔性调度两条可落地路线，不自动替用户做技术路线选择。",
+
       nMatrixP95: raw.nMatrixP95,
       nMatrixP99: raw.nMatrixP99,
       nMatrixMax: raw.nMatrixMax,
       nMatrixDailyAccess: raw.nMatrixDailyAccess,
-      dailyAccessDemand: round(raw.dailyAccessDemand || 0, 1)
+      dailyAccessDemand: round(raw.dailyAccessDemand || 0, 1),
+
+      pMatrixRecommendedKw: round(raw.pMatrixRecommendedKw || 0, 1),
+      pMatrixP95Kw: round(raw.pMatrixP95Kw || 0, 1),
+      pMatrixP99Kw: round(raw.pMatrixP99Kw || 0, 1),
+      pMatrixMaxKw: round(raw.pMatrixMaxKw || 0, 1)
     },
     baselineFromM2: {
       monthName: m2Result?.summary?.monthName || "--",
@@ -923,12 +1082,19 @@ function mapToM3Result(raw, payload, m2Result) {
         label: "柔性调度路线",
         suitability: "适合具备柔性配电、动态枪位接入或愿意采用矩阵化调度架构的项目。",
         matrixSizing: {
+          // 接入端口规模
           p95: raw.nMatrixP95,
           p99: raw.nMatrixP99,
           max: raw.nMatrixMax,
           dailyAccess: raw.nMatrixDailyAccess,
           dailyAccessDemand: round(raw.dailyAccessDemand || 0, 1),
-          recommended: raw.nMatrix
+          recommended: raw.nMatrix,
+
+          // 共享功率池规模
+          powerP95Kw: round(raw.pMatrixP95Kw || 0, 1),
+          powerP99Kw: round(raw.pMatrixP99Kw || 0, 1),
+          powerMaxKw: round(raw.pMatrixMaxKw || 0, 1),
+          recommendedPowerKw: round(raw.pMatrixRecommendedKw || 0, 1)
         },
         result: flexibleSummary,
         handoffToM4: buildRouteHandoff(flexibleSummary)
@@ -940,7 +1106,8 @@ function mapToM3Result(raw, payload, m2Result) {
       monthIndex: payload.params.monthIndex,
       useV2G: payload.params.useV2G,
       clipThreshold: payload.params.clipThreshold,
-      priceShiftThreshold: payload.params.priceShiftThreshold
+      priceShiftThreshold: payload.params.priceShiftThreshold,
+      pMatrixRecommendedKw: round(raw.pMatrixRecommendedKw || 0, 1)
     }
   };
 }
@@ -978,7 +1145,7 @@ export function runM3SelectedRouteAnnualValidation(context) {
     ? Boolean(m3Input.useV2G ?? true)
     : false;
 
-  // 柔性矩阵路线需要沿用 M3-A 算出的矩阵接口规模
+  // 柔性矩阵路线需要沿用 M3-A 算出的矩阵接口规模与功率池规模
   if (selectedRouteKey === "flex_matrix") {
     const matrixSizing = selectedRoute.matrixSizing || {};
     const fallbackNMatrix = payload.config.n7 + payload.config.n30;
@@ -987,6 +1154,43 @@ export function runM3SelectedRouteAnnualValidation(context) {
     payload.params.nMatrixP95 = Number(matrixSizing.p95 ?? payload.params.nMatrix);
     payload.params.nMatrixP99 = Number(matrixSizing.p99 ?? payload.params.nMatrix);
     payload.params.nMatrixMax = Number(matrixSizing.max ?? payload.params.nMatrix);
+
+    const flexMatrixSizing =
+      m3Result?.routeOptions?.flex_matrix?.matrixSizing ?? {};
+
+    const pMatrixRecommendedKw =
+      flexMatrixSizing.recommendedPowerKw ??
+      m3Result?.summary?.pMatrixRecommendedKw ??
+      null;
+
+    const pMatrixP95Kw =
+      flexMatrixSizing.powerP95Kw ??
+      m3Result?.summary?.pMatrixP95Kw ??
+      null;
+
+    const pMatrixP99Kw =
+      flexMatrixSizing.powerP99Kw ??
+      m3Result?.summary?.pMatrixP99Kw ??
+      null;
+
+    const pMatrixMaxKw =
+      flexMatrixSizing.powerMaxKw ??
+      m3Result?.summary?.pMatrixMaxKw ??
+      null;
+
+    if (
+      !(Number.isFinite(pMatrixRecommendedKw) && pMatrixRecommendedKw > 0)
+    ) {
+      console.warn(
+        "[M3-B] flex_matrix selected but pMatrixRecommendedKw is invalid:",
+        pMatrixRecommendedKw
+      );
+    }
+
+    payload.params.pMatrixKw = pMatrixRecommendedKw;
+    payload.params.pMatrixP95Kw = pMatrixP95Kw;
+    payload.params.pMatrixP99Kw = pMatrixP99Kw;
+    payload.params.pMatrixMaxKw = pMatrixMaxKw;
   }
 
   const annualResult = runAnnualValidation({
@@ -998,16 +1202,48 @@ export function runM3SelectedRouteAnnualValidation(context) {
 
   const annual = annualResult.annual || {};
 
+  // 为了在 M3-A 的 flex_matrix block 外部仍能使用 P_matrix 信息
+  // 构造返回值时，从已传参的 payload 中提取，而不是从局部作用域重新取。
+  const _pRec = payload.params.pMatrixKw ?? null;
+  const _pP95 = payload.params.pMatrixP95Kw ?? null;
+  const _pP99 = payload.params.pMatrixP99Kw ?? null;
+  const _pMax = payload.params.pMatrixMaxKw ?? null;
+
   return {
     contract: "M3AnnualValidationResult",
     selectedRouteKey,
     selectedRouteLabel: selectedRoute.label,
+
+    matrixConfig: selectedRouteKey === "flex_matrix"
+      ? {
+          nMatrix: payload.params.nMatrix,
+          nMatrixP95: payload.params.nMatrixP95,
+          nMatrixP99: payload.params.nMatrixP99,
+          nMatrixMax: payload.params.nMatrixMax,
+
+          pMatrixKw: _pRec,
+          pMatrixP95Kw: _pP95,
+          pMatrixP99Kw: _pP99,
+          pMatrixMaxKw: _pMax
+        }
+      : null,
 
     annualValidation: {
       totalUnmetKwh: round(annual.totalUnmet || 0, 1),
       totalQueueUnmetKwh: round(annual.totalQueueUnmet || 0, 1),
       totalOverflowCount: annual.totalOverflow || 0,
       serviceRate: round(annual.serviceRate || 0, 4),
+
+      // 柔性矩阵接口拥堵年度诊断
+      totalMatrixQueueTicks: annual.totalMatrixQueueTicks || 0,
+      totalMatrixQueueVehicleTicks: annual.totalMatrixQueueVehicleTicks || 0,
+      maxMatrixQueuePeak: annual.maxMatrixQueuePeak || 0,
+
+      // 柔性矩阵功率池拥堵年度诊断
+      totalPMatrixLimitedTicks: annual.totalPMatrixLimitedTicks || 0,
+      totalPMatrixLimitedEnergyKwh: round(annual.totalPMatrixLimitedEnergyKwh || 0, 1),
+      maxPMatrixGapKw: round(annual.maxPMatrixGapKw || 0, 1),
+      maxPMatrixRawPeakKw: round(annual.maxPMatrixRawPeakKw || 0, 1),
 
       monthsWithOverflow: annual.monthsWithOverflow || 0,
       monthsWithSocRisk: annual.monthsWithSocRisk || 0,

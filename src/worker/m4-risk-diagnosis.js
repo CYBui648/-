@@ -22,6 +22,13 @@ export function maxRiskLevel(...levels) {
     .sort((a, b) => rank[b] - rank[a])[0] || null;
 }
 
+function levelScore(level) {
+  if (level === "high") return 3;
+  if (level === "medium") return 2;
+  if (level === "low") return 1;
+  return 0;
+}
+
 export function diagnoseResidualRisk(base) {
   const handoff = base.selectedRoute.handoffToM4 || {};
   const routeResult = base.selectedRoute.result || {};
@@ -132,78 +139,110 @@ export function diagnoseResidualRisk(base) {
       1
     );
 
-  // ---- 综合风险口径：压力月 + 全年 ----
-  const combinedResidualUnmet =
-    Math.max(residualUnmet, annualTotalUnmet);
-  const combinedResidualQueue =
-    Math.max(residualQueue, annualTotalQueueUnmet);
-  const combinedResidualOverflow =
-    Math.max(residualOverflow, annualTotalOverflow);
-  // SOC：若全年有月度 SOC 风险，综合取更悲观值（cap at 5%）
-  const combinedSocMin =
+  // ============================================================
+  // Round 6：传统风险拆分为 stressRisk / annualRisk / combinedRisk
+  // ============================================================
+
+  // 1) 压力月风险：仅看 M3-A 压力月残余表现
+  const stressEnergyRiskLevel =
+    residualUnmet > 1
+      ? riskLevel(residualUnmet, [60, 200])
+      : null;
+
+  const stressDeliveryServiceRiskLevel =
+    residualQueue > 1
+      ? riskLevel(residualQueue, [30, 100])
+      : null;
+
+  const stressPowerRiskLevel =
+    residualOverflow > 0 || transformerGapKw > 1
+      ? maxRiskLevel(
+          transformerGapKw > 1
+            ? riskLevel(transformerGapKw, [30, 100])
+            : null,
+          residualOverflow > 0
+            ? riskLevel(residualOverflow, [15, 30])
+            : null
+        )
+      : null;
+
+  const stressStorageRiskLevel =
+    residualSoc < 8
+      ? (
+          residualSoc >= 5
+            ? "low"
+            : residualSoc >= 3
+              ? "medium"
+              : "high"
+        )
+      : null;
+
+  // 2) 全年风险：仅看 M3-B 年度验证画像
+  const annualEnergyRiskLevel =
+    annualTotalUnmet > 1 || annualServiceRate < 0.995
+      ? maxRiskLevel(
+          annualTotalUnmet > 1
+            ? riskLevel(annualTotalUnmet, [300, 1200])
+            : null,
+          annualServiceRate < 0.995
+            ? (
+                annualServiceRate >= 0.99
+                  ? "low"
+                  : annualServiceRate >= 0.97
+                    ? "medium"
+                    : "high"
+              )
+            : null
+        )
+      : null;
+
+  const annualDeliveryServiceRiskLevel =
+    annualTotalQueueUnmet > 1
+      ? riskLevel(annualTotalQueueUnmet, [150, 600])
+      : null;
+
+  const annualPowerRiskLevel =
+    annualTotalOverflow > 0 || annualMonthsWithOverflow > 0
+      ? maxRiskLevel(
+          annualTotalOverflow > 0
+            ? riskLevel(annualTotalOverflow, [30, 120])
+            : null,
+          annualMonthsWithOverflow > 0
+            ? riskLevel(annualMonthsWithOverflow, [1, 3])
+            : null
+        )
+      : null;
+
+  const annualStorageRiskLevel =
     annualMonthsWithSocRisk > 0
-      ? Math.min(residualSoc, 5)
-      : residualSoc;
+      ? riskLevel(annualMonthsWithSocRisk, [1, 3])
+      : null;
 
-  // ---- 经典风险维度（升级为 压力月 + 全年 综合口径） ----
-  const accessServiceActive = combinedResidualQueue > 1;
-  const deliveryServiceActive =
-    combinedResidualUnmet > 1 || annualServiceRate < 0.95;
-  const powerActive =
-    combinedResidualOverflow > 0 ||
-    transformerGapKw > 1 ||
-    annualMonthsWithOverflow > 0;
-  const energyActive =
-    combinedResidualUnmet > 1 || annualServiceRate < 0.95;
-  const storageActive =
-    combinedSocMin < 8 || annualMonthsWithSocRisk > 0;
+  // 3) 综合风险：M4 最终采用"压力月 vs 全年"更严重的等级
+  const energyLevel = maxRiskLevel(
+    stressEnergyRiskLevel,
+    annualEnergyRiskLevel
+  );
 
-  const powerLevel = powerActive
-    ? maxRiskLevel(
-        transformerGapKw > 1
-          ? riskLevel(transformerGapKw, [30, 100])
-          : null,
-        combinedResidualOverflow > 0
-          ? riskLevel(combinedResidualOverflow, [15, 30])
-          : null,
-        annualMonthsWithOverflow > 0
-          ? riskLevel(annualMonthsWithOverflow, [1, 3])
-          : null
-      )
-    : null;
-  const energyLevel = energyActive
-    ? maxRiskLevel(
-        combinedResidualUnmet > 1
-          ? riskLevel(combinedResidualUnmet, [60, 200])
-          : null,
-        annualServiceRate < 0.95
-          ? (annualServiceRate < 0.85 ? "high" : "medium")
-          : null
-      )
-    : null;
-  const accessServiceLevel = accessServiceActive
-    ? riskLevel(combinedResidualQueue, [30, 100])
-    : null;
-  const deliveryServiceLevel = deliveryServiceActive
-    ? maxRiskLevel(
-        combinedResidualUnmet > 1
-          ? riskLevel(combinedResidualUnmet, [60, 200])
-          : null,
-        annualServiceRate < 0.95
-          ? (annualServiceRate < 0.85 ? "high" : "medium")
-          : null
-      )
-    : null;
-  const storageLevel = storageActive
-    ? maxRiskLevel(
-        combinedSocMin < 8
-          ? (combinedSocMin >= 5 ? "low" : combinedSocMin >= 3 ? "medium" : "high")
-          : null,
-        annualMonthsWithSocRisk > 0
-          ? riskLevel(annualMonthsWithSocRisk, [1, 3])
-          : null
-      )
-    : null;
+  const deliveryServiceLevel = maxRiskLevel(
+    stressDeliveryServiceRiskLevel,
+    annualDeliveryServiceRiskLevel
+  );
+
+  const powerLevel = maxRiskLevel(
+    stressPowerRiskLevel,
+    annualPowerRiskLevel
+  );
+
+  const storageLevel = maxRiskLevel(
+    stressStorageRiskLevel,
+    annualStorageRiskLevel
+  );
+
+  const energyActive = Boolean(energyLevel);
+  const deliveryServiceActive = Boolean(deliveryServiceLevel);
+  const powerActive = Boolean(powerLevel);
+  const storageActive = Boolean(storageLevel);
 
   // ---- 新增：accessPortRisk（接口堵） ----
   const accessPortRiskActive =
@@ -281,20 +320,14 @@ export function diagnoseResidualRisk(base) {
   const serviceRiskActive =
     Boolean(accessPortRiskActive || matrixPowerRiskActive);
 
-  // severityScore 纳入全年：serviceRate 惩罚 + monthsWithSocRisk 惩罚
-  const baseSeverityScore =
-    Math.min(35, combinedResidualUnmet / 120) +
-    Math.min(25, combinedResidualQueue / 100) +
-    Math.min(20, combinedResidualOverflow * 2) +
-    Math.min(20, Math.max(0, 8 - combinedSocMin) * 2.5);
-
-  const serviceRatePenalty =
-    annualServiceRate < 0.85 ? 15 : annualServiceRate < 0.95 ? 8 : 0;
-
-  const socMonthPenalty =
-    Math.min(10, annualMonthsWithSocRisk * 2.5);
-
-  const severityScore = baseSeverityScore + serviceRatePenalty + socMonthPenalty;
+  // severityScore：从"直接揉指标"改为"风险等级综合打分"
+  const severityScore =
+    levelScore(energyLevel) * 6 +
+    levelScore(deliveryServiceLevel) * 6 +
+    levelScore(powerLevel) * 5 +
+    levelScore(storageLevel) * 4 +
+    levelScore(accessPortRiskLevel) * 4 +
+    levelScore(matrixPowerRiskLevel) * 4;
 
   return {
     // 压力月口径（保留用于对比）
@@ -311,13 +344,35 @@ export function diagnoseResidualRisk(base) {
     annualMonthsWithOverflow,
     annualServiceRate: round(annualServiceRate, 4),
 
-    // 综合口径（M4 后续主用）
-    residualUnmetKwh: round(combinedResidualUnmet, 1),
-    residualQueueUnmetKwh: round(combinedResidualQueue, 1),
-    residualOverflowCount: combinedResidualOverflow,
-    residualSocMinPct: round(combinedSocMin, 1),
+    // 压力月残余原始量：保留原始物理含义，Round 7 再决定方案生成如何使用
+    residualUnmetKwh: round(residualUnmet, 1),
+    residualQueueUnmetKwh: round(residualQueue, 1),
+    residualOverflowCount: residualOverflow,
+    residualSocMinPct: round(residualSoc, 1),
     routePeakKw: round(peak, 1),
     transformerGapKw: round(transformerGapKw, 1),
+
+    // 三层风险画像
+    riskLayers: {
+      stressRisk: {
+        energyRisk: stressEnergyRiskLevel,
+        deliveryServiceRisk: stressDeliveryServiceRiskLevel,
+        powerRisk: stressPowerRiskLevel,
+        storageRisk: stressStorageRiskLevel
+      },
+      annualRisk: {
+        energyRisk: annualEnergyRiskLevel,
+        deliveryServiceRisk: annualDeliveryServiceRiskLevel,
+        powerRisk: annualPowerRiskLevel,
+        storageRisk: annualStorageRiskLevel
+      },
+      combinedRisk: {
+        energyRisk: energyLevel,
+        deliveryServiceRisk: deliveryServiceLevel,
+        powerRisk: powerLevel,
+        storageRisk: storageLevel
+      }
+    },
 
     // 兼容聚合（旧字段）
     serviceRisk: { active: serviceRiskActive, level: serviceRiskLevel },

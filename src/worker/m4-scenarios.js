@@ -33,6 +33,13 @@ function applyServiceDeltaByLevel(baseDelta, level) {
   return Math.max(1, Math.ceil(baseDelta * 0.65)); // medium
 }
 
+function floorByRiskLevel(level, low, medium, high) {
+  if (level === "high") return high;
+  if (level === "medium") return medium;
+  if (level === "low") return low;
+  return 0;
+}
+
 export function buildScenarioPlans(base, diagnosis) {
   const pvBase = base.config.P_pv;
   const essBase = base.config.E_storage;
@@ -43,27 +50,90 @@ export function buildScenarioPlans(base, diagnosis) {
   const transformerGap = safeNumber(diagnosis.transformerGapKw, 0);
   const powerRisk = diagnosis.powerRisk || {};
   const energyRisk = diagnosis.energyRisk || {};
-  const serviceRisk = diagnosis.serviceRisk || {};
   const storageRisk = diagnosis.storageRisk || {};
   const accessPortRisk = diagnosis.accessPortRisk || {};
   const matrixPowerRisk = diagnosis.matrixPowerRisk || {};
+  const deliveryServiceRisk = diagnosis.deliveryServiceRisk || {};
 
-  const powerDelta = ceilTo(Math.max(transformerGap * 0.9, pcsBase * 0.25, powerRisk.active ? 25 : 0), 25);
-  const energyDelta = ceilTo(Math.max(residualUnmet * 0.05, essBase * 0.35, storageRisk.active ? 100 : 0, energyRisk.active ? 75 : 0), 50);
-  const pvDelta = ceilTo(Math.max(residualUnmet * 0.02, energyRisk.active ? pvBase * 0.10 : 0), 25);
+  // Round 7：年度原始指标，用于 triggerBasis 解释
+  const annualTotalUnmet =
+    safeNumber(diagnosis.annualTotalUnmetKwh, 0);
+  const annualTotalQueueUnmet =
+    safeNumber(diagnosis.annualTotalQueueUnmetKwh, 0);
+  const annualTotalOverflow =
+    safeNumber(diagnosis.annualTotalOverflowCount, 0);
+  const annualMonthsWithOverflow =
+    safeNumber(diagnosis.annualMonthsWithOverflow, 0);
+  const annualMonthsWithSocRisk =
+    safeNumber(diagnosis.annualMonthsWithSocRisk, 0);
 
-  // S3 只在真实接口拥堵(accessPortRisk)时加桩/矩阵，不受 residualUnmet 或功率池堵误导
-  const pileDelta = accessPortRisk.active
-    ? Math.max(1, Math.ceil(residualQueue / 600))
+  // Round 7：方案 sizing 驱动量
+  // 不直接把全年累计量当成压力月残差，
+  // 而是折算成"月均等效"后与压力月残差取更严重者。
+  const unmetSizingDriver =
+    Math.max(residualUnmet, annualTotalUnmet / 12);
+  const queueSizingDriver =
+    Math.max(residualQueue, annualTotalQueueUnmet / 12);
+
+  // Round 7：风险等级底座
+  const powerRiskFloor = floorByRiskLevel(
+    powerRisk.level,
+    25,
+    50,
+    75
+  );
+  const energyRiskFloor = floorByRiskLevel(
+    energyRisk.level,
+    75,
+    125,
+    200
+  );
+  const storageRiskFloor = floorByRiskLevel(
+    storageRisk.level,
+    100,
+    150,
+    250
+  );
+
+  const powerDelta = ceilTo(
+    Math.max(
+      transformerGap * 0.9,
+      pcsBase * 0.25,
+      powerRiskFloor
+    ),
+    25
+  );
+
+  const energyDelta = ceilTo(
+    Math.max(
+      unmetSizingDriver * 0.05,
+      essBase * 0.35,
+      energyRiskFloor,
+      storageRiskFloor
+    ),
+    50
+  );
+
+  const pvDelta = ceilTo(
+    Math.max(
+      unmetSizingDriver * 0.02,
+      energyRisk.active ? pvBase * 0.10 : 0
+    ),
+    25
+  );
+
+  // S3：传统桩看 deliveryServiceRisk，柔性矩阵看 accessPortRisk
+  const pileDelta = deliveryServiceRisk.active
+    ? Math.max(1, Math.ceil(queueSizingDriver / 600))
     : 0;
   const matrixDelta = accessPortRisk.active
-    ? Math.max(2, Math.ceil(residualQueue / 900))
+    ? Math.max(2, Math.ceil(queueSizingDriver / 900))
     : 0;
 
   const serviceDelta = routeKey === "traditional_pile"
     ? {
         deltaN7: pileDelta,
-        deltaN30: serviceRisk.active
+        deltaN30: deliveryServiceRisk.active
           ? Math.max(0, Math.ceil(pileDelta / 2))
           : 0,
         deltaMatrix: 0
@@ -74,7 +144,7 @@ export function buildScenarioPlans(base, diagnosis) {
         deltaMatrix: matrixDelta
       };
 
-  // S4 纳入 storageRisk：SOC 风险也触发储能加固
+  // S4 综合平衡方案
   const s4Deltas = { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 };
 
   if (powerRisk.active && powerRisk.level) {
@@ -90,11 +160,11 @@ export function buildScenarioPlans(base, diagnosis) {
       ? applyEnergyDeltaByLevel(pvDelta, combinedEnergyLevel)
       : 0;
   }
-  // S4 服务扩容：传统桩看 serviceRisk，柔性矩阵只看 accessPortRisk
+  // S4 服务扩容：传统桩看 deliveryServiceRisk，柔性矩阵看 accessPortRisk
   if (routeKey === "traditional_pile") {
-    if (serviceRisk.active && serviceRisk.level) {
-      s4Deltas.deltaN7 = applyServiceDeltaByLevel(serviceDelta.deltaN7, serviceRisk.level);
-      s4Deltas.deltaN30 = applyServiceDeltaByLevel(serviceDelta.deltaN30, serviceRisk.level);
+    if (deliveryServiceRisk.active && deliveryServiceRisk.level) {
+      s4Deltas.deltaN7 = applyServiceDeltaByLevel(serviceDelta.deltaN7, deliveryServiceRisk.level);
+      s4Deltas.deltaN30 = applyServiceDeltaByLevel(serviceDelta.deltaN30, deliveryServiceRisk.level);
     }
   } else {
     if (accessPortRisk.active && accessPortRisk.level) {
@@ -119,44 +189,92 @@ export function buildScenarioPlans(base, diagnosis) {
           ? "针对最低 SOC 安全边界不足，优先补充储能韧性。"
           : "当前能量风险不突出，本方案保留为能量侧专项加固备选。";
 
-  const s3Intent = accessPortRisk.active
-    ? (
-        routeKey === "traditional_pile"
-          ? "围绕传统桩站路线，补充固定桩位服务能力，缓解排队与接入拥堵。"
-          : "围绕柔性调度路线，针对矩阵端口接入拥堵扩大 N_matrix，缓解车辆排队与接口不足。"
-      )
-    : "当前接口拥堵风险不突出，本方案不主动扩大充电接口。";
+  const s3Intent =
+    routeKey === "traditional_pile"
+      ? (
+          deliveryServiceRisk.active
+            ? "围绕传统桩站路线，补充固定桩位服务能力，缓解排队与接入服务损失。"
+            : "当前传统桩接入服务风险不突出，本方案不主动扩充固定桩位。"
+        )
+      : (
+          accessPortRisk.active
+            ? "围绕柔性调度路线，针对矩阵端口接入拥堵扩大 N_matrix，缓解车辆排队与接口不足。"
+            : "当前矩阵接口拥堵风险不突出，本方案不主动扩大 N_matrix。"
+        );
 
-  // triggerBasis 解释每个方案"为什么生成"
+  // triggerBasis 解释每个方案"为什么生成"（含年度风险来源）
   const s1TriggerBasis = [
     powerRisk.active ? `功率风险等级：${powerRisk.level}` : null,
-    transformerGap > 0 ? `峰值超出变压器边界 ${round(transformerGap, 1)} kW` : null,
+    transformerGap > 0 ? `压力月峰值超出变压器边界 ${round(transformerGap, 1)} kW` : null,
     diagnosis.residualOverflowCount > 0
-      ? `残余越限次数 ${diagnosis.residualOverflowCount} 次`
+      ? `压力月残余越限 ${diagnosis.residualOverflowCount} 次`
+      : null,
+    annualTotalOverflow > 0
+      ? `全年累计越限 ${annualTotalOverflow} 次`
+      : null,
+    annualMonthsWithOverflow > 0
+      ? `全年越限月份 ${annualMonthsWithOverflow} 个`
       : null
   ].filter(Boolean);
 
   const s2TriggerBasis = [
     energyRisk.active ? `能量风险等级：${energyRisk.level}` : null,
     storageRisk.active ? `SOC 风险等级：${storageRisk.level}` : null,
-    residualUnmet > 0 ? `残余未满足电量 ${round(residualUnmet, 1)} kWh` : null,
+    residualUnmet > 0
+      ? `压力月残余未满足电量 ${round(residualUnmet, 1)} kWh`
+      : null,
+    annualTotalUnmet > 0
+      ? `全年累计未满足电量 ${round(annualTotalUnmet, 1)} kWh`
+      : null,
     diagnosis.residualSocMinPct < 8
-      ? `最低 SOC ${diagnosis.residualSocMinPct}%`
+      ? `压力月最低 SOC ${diagnosis.residualSocMinPct}%`
+      : null,
+    annualMonthsWithSocRisk > 0
+      ? `全年 SOC 风险月份 ${annualMonthsWithSocRisk} 个`
       : null
   ].filter(Boolean);
 
-  const s3TriggerBasis = [
-    accessPortRisk.active ? `接口拥堵风险等级：${accessPortRisk.level}` : null,
-    residualQueue > 0 ? `残余排队损失 ${round(residualQueue, 1)} kWh` : null
-  ].filter(Boolean);
+  const s3TriggerBasis =
+    routeKey === "traditional_pile"
+      ? [
+          deliveryServiceRisk.active
+            ? `接入服务风险等级：${deliveryServiceRisk.level}`
+            : null,
+          residualQueue > 0
+            ? `压力月排队损失 ${round(residualQueue, 1)} kWh`
+            : null,
+          annualTotalQueueUnmet > 0
+            ? `全年累计排队损失 ${round(annualTotalQueueUnmet, 1)} kWh`
+            : null
+        ].filter(Boolean)
+      : [
+          accessPortRisk.active
+            ? `矩阵接口拥堵风险等级：${accessPortRisk.level}`
+            : null,
+          residualQueue > 0
+            ? `压力月排队损失 ${round(residualQueue, 1)} kWh`
+            : null,
+          annualTotalQueueUnmet > 0
+            ? `全年累计排队损失 ${round(annualTotalQueueUnmet, 1)} kWh`
+            : null
+        ].filter(Boolean);
 
   const s4TriggerBasis = [
     powerRisk.active ? `功率风险 ${powerRisk.level}` : null,
     energyRisk.active ? `能量风险 ${energyRisk.level}` : null,
     storageRisk.active ? `SOC 风险 ${storageRisk.level}` : null,
-    serviceRisk.active ? `接入服务风险 ${serviceRisk.level}` : null,
-    accessPortRisk.active ? `接口拥堵风险 ${accessPortRisk.level}` : null,
-    matrixPowerRisk.active ? `功率池拥堵风险 ${matrixPowerRisk.level}` : null
+
+    routeKey === "traditional_pile" && deliveryServiceRisk.active
+      ? `接入服务风险 ${deliveryServiceRisk.level}`
+      : null,
+
+    routeKey !== "traditional_pile" && accessPortRisk.active
+      ? `矩阵接口拥堵风险 ${accessPortRisk.level}`
+      : null,
+
+    routeKey !== "traditional_pile" && matrixPowerRisk.active
+      ? `已识别功率池拥堵风险 ${matrixPowerRisk.level}，当前阶段暂不单独调整 P_matrix`
+      : null
   ].filter(Boolean);
 
   return [

@@ -9,7 +9,10 @@ import {
   buildRecommendation,
   scoreScenarios
 } from "./m4-recommendation.js";
-import { buildScenarioPlans } from "./m4-scenarios.js";
+import {
+  buildScenarioPlans,
+  buildCompositeScenarioPlans
+} from "./m4-scenarios.js";
 
 function round(value, digits = 2) {
   if (!Number.isFinite(value)) return value;
@@ -34,6 +37,33 @@ function safeNumber(value, fallback = 0) {
   return Number.isFinite(Number(value)) ? Number(value) : fallback;
 }
 
+function calcReductionAbs(baseValue, currentValue) {
+  return round(safeNumber(baseValue, 0) - safeNumber(currentValue, 0), 4);
+}
+
+function calcReductionRate(baseValue, currentValue) {
+  const base = safeNumber(baseValue, 0);
+  const current = safeNumber(currentValue, 0);
+  if (base <= 0) return null;
+  return round((base - current) / base, 4);
+}
+
+function calcGainAbs(currentValue, baseValue) {
+  return round(safeNumber(currentValue, 0) - safeNumber(baseValue, 0), 4);
+}
+
+function classifyImprovement(rate) {
+  if (rate == null) return "not_applicable";
+  if (rate >= 0.60) return "strong";
+  if (rate >= 0.30) return "moderate";
+  if (rate >= 0.05) return "limited";
+  return "none";
+}
+
+function isMeaningfulImprovement(level) {
+  return level === "strong" || level === "moderate";
+}
+
 function calcExtraCapexWan(base, scenario) {
   const input = base.m1Input || {};
   const d = scenario.deltas || {};
@@ -43,6 +73,8 @@ function calcExtraCapexWan(base, scenario) {
   const storRate = safeNumber(input.storRate, 12);
   const cost7kw = safeNumber(input.cost7kw, 0.30);
   const cost30kw = safeNumber(input.cost30kw, 2.50);
+  const transformerUpgradeCostWanPerKw =
+    safeNumber(input.transformerUpgradeCostWanPerKw, 0);
 
   const finalStorage = base.config.E_storage + safeNumber(d.deltaStorageKwh, 0);
   const pvYuan = safeNumber(d.deltaPvKw, 0) * 1000 * pvPrice * (1 + pvRate / 100);
@@ -50,8 +82,17 @@ function calcExtraCapexWan(base, scenario) {
   const pcsYuan = safeNumber(d.deltaPcsKw, 0) * 450 * (1 + storRate / 100);
   const chargersWan = safeNumber(d.deltaN7, 0) * cost7kw + safeNumber(d.deltaN30, 0) * cost30kw;
   const matrixWan = safeNumber(d.deltaMatrix, 0) * 0.08;
+  const transformerWan =
+    safeNumber(d.deltaTransformerKw, 0) *
+    transformerUpgradeCostWanPerKw;
 
-  return round((pvYuan + essYuan + pcsYuan) / 10000 + chargersWan + matrixWan, 2);
+  return round(
+    (pvYuan + essYuan + pcsYuan) / 10000 +
+    chargersWan +
+    matrixWan +
+    transformerWan,
+    2
+  );
 }
 
 function materializeScenarioPayload(base, scenario, extraCapexWan) {
@@ -61,6 +102,9 @@ function materializeScenarioPayload(base, scenario, extraCapexWan) {
     P_pv: base.config.P_pv + safeNumber(d.deltaPvKw, 0),
     E_storage: base.config.E_storage + safeNumber(d.deltaStorageKwh, 0),
     P_storage: base.config.P_storage + safeNumber(d.deltaPcsKw, 0),
+    transformerLimit:
+      base.config.transformerLimit +
+      safeNumber(d.deltaTransformerKw, 0),
     n7: base.config.n7 + safeNumber(d.deltaN7, 0),
     n30: base.config.n30 + safeNumber(d.deltaN30, 0),
     baseCapexYuan: base.config.baseCapexYuan + extraCapexWan * 10000
@@ -132,6 +176,7 @@ function evaluateScenario(base, scenario) {
       pvKw: round(payload.config.P_pv, 1),
       storageKwh: round(payload.config.E_storage, 1),
       pcsKw: round(payload.config.P_storage, 1),
+      transformerLimitKw: round(payload.config.transformerLimit, 1),
       n7kw: payload.config.n7,
       n30kw: payload.config.n30,
       nMatrix: base.selectedRouteKey === "flex_matrix" ? safeNumber(payload.params.nMatrix, 0) : null,
@@ -184,22 +229,406 @@ function evaluateScenario(base, scenario) {
   };
 }
 
+function buildImprovementVsBaseline(scenario, baseline) {
+  const sAnnual = scenario.annualValidation || {};
+  const bAnnual = baseline.annualValidation || {};
+  const sStress = scenario.stressMonth || {};
+  const bStress = baseline.stressMonth || {};
+
+  return {
+    baselineScenarioId: baseline.id,
+
+    annual: {
+      unmetReductionKwh: calcReductionAbs(
+        bAnnual.totalUnmetKwh,
+        sAnnual.totalUnmetKwh
+      ),
+      unmetReductionRate: calcReductionRate(
+        bAnnual.totalUnmetKwh,
+        sAnnual.totalUnmetKwh
+      ),
+
+      queueUnmetReductionKwh: calcReductionAbs(
+        bAnnual.totalQueueUnmetKwh,
+        sAnnual.totalQueueUnmetKwh
+      ),
+      queueUnmetReductionRate: calcReductionRate(
+        bAnnual.totalQueueUnmetKwh,
+        sAnnual.totalQueueUnmetKwh
+      ),
+
+      overflowReductionCount: calcReductionAbs(
+        bAnnual.totalOverflowCount,
+        sAnnual.totalOverflowCount
+      ),
+      overflowReductionRate: calcReductionRate(
+        bAnnual.totalOverflowCount,
+        sAnnual.totalOverflowCount
+      ),
+
+      socRiskMonthsReduction: calcReductionAbs(
+        bAnnual.monthsWithSocRisk,
+        sAnnual.monthsWithSocRisk
+      ),
+      socRiskMonthsReductionRate: calcReductionRate(
+        bAnnual.monthsWithSocRisk,
+        sAnnual.monthsWithSocRisk
+      ),
+
+      serviceRateGain: calcGainAbs(
+        sAnnual.serviceRate,
+        bAnnual.serviceRate
+      ),
+
+      matrixQueueTicksReduction: calcReductionAbs(
+        bAnnual.totalMatrixQueueTicks,
+        sAnnual.totalMatrixQueueTicks
+      ),
+      matrixQueueTicksReductionRate: calcReductionRate(
+        bAnnual.totalMatrixQueueTicks,
+        sAnnual.totalMatrixQueueTicks
+      ),
+
+      matrixQueueVehicleTicksReduction: calcReductionAbs(
+        bAnnual.totalMatrixQueueVehicleTicks,
+        sAnnual.totalMatrixQueueVehicleTicks
+      ),
+      matrixQueueVehicleTicksReductionRate: calcReductionRate(
+        bAnnual.totalMatrixQueueVehicleTicks,
+        sAnnual.totalMatrixQueueVehicleTicks
+      ),
+
+      pMatrixLimitedEnergyReductionKwh: calcReductionAbs(
+        bAnnual.totalPMatrixLimitedEnergyKwh,
+        sAnnual.totalPMatrixLimitedEnergyKwh
+      ),
+      pMatrixLimitedEnergyReductionRate: calcReductionRate(
+        bAnnual.totalPMatrixLimitedEnergyKwh,
+        sAnnual.totalPMatrixLimitedEnergyKwh
+      )
+    },
+
+    stressMonth: {
+      unmetReductionKwh: calcReductionAbs(
+        bStress.unmetTotalKwh,
+        sStress.unmetTotalKwh
+      ),
+
+      queueUnmetReductionKwh: calcReductionAbs(
+        bStress.queueUnmetKwh,
+        sStress.queueUnmetKwh
+      ),
+
+      overflowReductionCount: calcReductionAbs(
+        bStress.overflowCount,
+        sStress.overflowCount
+      ),
+
+      socMinPctGain: calcGainAbs(
+        sStress.socMinPct,
+        bStress.socMinPct
+      ),
+
+      matrixQueueTicksReduction: calcReductionAbs(
+        bStress.matrixQueueTicks,
+        sStress.matrixQueueTicks
+      ),
+
+      matrixQueueVehicleTicksReduction: calcReductionAbs(
+        bStress.matrixQueueVehicleTicks,
+        sStress.matrixQueueVehicleTicks
+      ),
+
+      pMatrixLimitedEnergyReductionKwh: calcReductionAbs(
+        bStress.pMatrixLimitedEnergyKwh,
+        sStress.pMatrixLimitedEnergyKwh
+      )
+    }
+  };
+}
+
+function buildFamilyEffectiveness(scenario, improvement, routeKey) {
+  const family = scenario.family || scenario.id || "unknown";
+  const annual = improvement?.annual || {};
+
+  if (family === "S0") {
+    return {
+      family,
+      primaryMetricKey: null,
+      primaryMetricLabel: "基准对照",
+      primaryReductionRate: null,
+      level: "baseline",
+      isMeaningful: null,
+      note: "S0 为基准对照方案，不参与专项改善判定。"
+    };
+  }
+
+  if (scenario.id?.endsWith("-0")) {
+    return {
+      family,
+      primaryMetricKey: null,
+      primaryMetricLabel: "未触发",
+      primaryReductionRate: null,
+      level: "not_triggered",
+      isMeaningful: null,
+      note: "该专项风险未触发，本候选仅作为说明性占位。"
+    };
+  }
+
+  if (family === "S1") {
+    const rate = annual.overflowReductionRate;
+    const level = classifyImprovement(rate);
+
+    return {
+      family,
+      primaryMetricKey: "annualOverflowReductionRate",
+      primaryMetricLabel: "全年越限次数下降率",
+      primaryReductionRate: rate,
+      level,
+      isMeaningful: isMeaningfulImprovement(level),
+      note:
+        level === "strong"
+          ? "该功率侧候选对全年越限风险形成显著改善。"
+          : level === "moderate"
+            ? "该功率侧候选对全年越限风险形成中等改善。"
+            : "该功率侧候选对全年越限风险的改善仍较有限。"
+    };
+  }
+
+  if (family === "S2") {
+    const unmetRate = annual.unmetReductionRate;
+    const socRate = annual.socRiskMonthsReductionRate;
+
+    const primaryRate =
+      Math.max(
+        unmetRate ?? -Infinity,
+        socRate ?? -Infinity
+      ) === -Infinity
+        ? null
+        : Math.max(unmetRate ?? 0, socRate ?? 0);
+
+    const level = classifyImprovement(primaryRate);
+
+    return {
+      family,
+      primaryMetricKey: "max(annualUnmetReductionRate, annualSocRiskMonthsReductionRate)",
+      primaryMetricLabel: "全年能量缺口 / SOC 风险改善率",
+      primaryReductionRate: primaryRate,
+      level,
+      isMeaningful: isMeaningfulImprovement(level),
+      note:
+        level === "strong"
+          ? "该能量侧候选对全年缺口或 SOC 风险形成显著改善。"
+          : level === "moderate"
+            ? "该能量侧候选对全年缺口或 SOC 风险形成中等改善。"
+            : "该能量侧候选对全年缺口或 SOC 风险的改善仍较有限。"
+    };
+  }
+
+  if (family === "S3") {
+    const rate =
+      routeKey === "traditional_pile"
+        ? annual.queueUnmetReductionRate
+        : annual.matrixQueueVehicleTicksReductionRate;
+
+    const level = classifyImprovement(rate);
+
+    return {
+      family,
+      primaryMetricKey:
+        routeKey === "traditional_pile"
+          ? "annualQueueUnmetReductionRate"
+          : "annualMatrixQueueVehicleTicksReductionRate",
+      primaryMetricLabel:
+        routeKey === "traditional_pile"
+          ? "全年排队损失下降率"
+          : "全年矩阵接口排队车时下降率",
+      primaryReductionRate: rate,
+      level,
+      isMeaningful: isMeaningfulImprovement(level),
+      note:
+        level === "strong"
+          ? "该服务侧候选对全年接入服务风险形成显著改善。"
+          : level === "moderate"
+            ? "该服务侧候选对全年接入服务风险形成中等改善。"
+            : "该服务侧候选对全年接入服务风险的改善仍较有限。"
+    };
+  }
+
+  if (family === "S4") {
+    const componentFamilies =
+      scenario.compositeMeta?.componentFamilies || [];
+
+    const componentRates = componentFamilies.map((componentFamily) => {
+      if (componentFamily === "S1") {
+        return annual.overflowReductionRate;
+      }
+
+      if (componentFamily === "S2") {
+        const unmetRate = annual.unmetReductionRate;
+        const socRate = annual.socRiskMonthsReductionRate;
+
+        if (unmetRate == null && socRate == null) return null;
+
+        return Math.max(unmetRate ?? 0, socRate ?? 0);
+      }
+
+      if (componentFamily === "S3") {
+        return routeKey === "traditional_pile"
+          ? annual.queueUnmetReductionRate
+          : annual.matrixQueueVehicleTicksReductionRate;
+      }
+
+      return null;
+    }).filter((rate) => rate != null);
+
+    const allModerateOrBetter =
+      componentRates.length > 0 &&
+      componentRates.every((rate) => rate >= 0.30);
+
+    const allStrong =
+      componentRates.length > 0 &&
+      componentRates.every((rate) => rate >= 0.60);
+
+    const primaryRate =
+      componentRates.length > 0
+        ? componentRates.reduce((sum, rate) => sum + rate, 0) /
+          componentRates.length
+        : null;
+
+    const level =
+      allStrong
+        ? "strong"
+        : allModerateOrBetter
+          ? "moderate"
+          : componentRates.some((rate) => rate >= 0.05)
+            ? "limited"
+            : "none";
+
+    return {
+      family,
+      primaryMetricKey: "average(component risk reduction rates)",
+      primaryMetricLabel: "组合风险平均改善率",
+      primaryReductionRate: primaryRate == null ? null : round(primaryRate, 4),
+      level,
+      isMeaningful: allModerateOrBetter,
+      note:
+        allStrong
+          ? "该综合方案对所组合的多个专项风险均形成显著改善。"
+          : allModerateOrBetter
+            ? "该综合方案对所组合的多个专项风险形成中等以上改善。"
+            : "该综合方案尚未在多个专项风险上同时形成充分改善。"
+    };
+  }
+
+  return {
+    family,
+    primaryMetricKey: null,
+    primaryMetricLabel: "未知方案族",
+    primaryReductionRate: null,
+    level: "unknown",
+    isMeaningful: null,
+    note: "未识别的方案族，暂不进行专项改善判定。"
+  };
+}
+
+function attachImprovementDiagnostics(evaluated, routeKey) {
+  const baseline =
+    evaluated.find((scenario) => scenario.id === "S0") ||
+    evaluated.find((scenario) => scenario.family === "S0") ||
+    null;
+
+  if (!baseline) return evaluated;
+
+  return evaluated.map((scenario) => {
+    const improvementVsBaseline =
+      buildImprovementVsBaseline(scenario, baseline);
+
+    return {
+      ...scenario,
+      improvementVsBaseline,
+      familyEffectiveness: buildFamilyEffectiveness(
+        scenario,
+        improvementVsBaseline,
+        routeKey
+      )
+    };
+  });
+}
+
 export function runM4FinalPlanner(context) {
   const base = buildBasePayload(context);
   const diagnosis = diagnoseResidualRisk(base);
-  const scenarioPlans = buildScenarioPlans(base, diagnosis);
-  const evaluated = scenarioPlans.map((scenario) => evaluateScenario(base, scenario));
-  const scored = scoreScenarios(evaluated, context.input?.m4 || {});
+  // ============================================================
+  // 第一阶段：专项方案族 S0 / S1 / S2 / S3
+  // ============================================================
+
+  const specializedPlans = buildScenarioPlans(base, diagnosis);
+
+  const evaluatedSpecialized = specializedPlans.map((scenario) =>
+    evaluateScenario(base, scenario)
+  );
+
+  const specializedWithImprovement = attachImprovementDiagnostics(
+    evaluatedSpecialized,
+    base.selectedRouteKey
+  );
+
+  const scoredSpecialized = scoreScenarios(
+    specializedWithImprovement,
+    context.input?.m4 || {}
+  );
+
+  // ============================================================
+  // 第二阶段：基于"已验证有效"的专项候选生成 S4 综合方案
+  // ============================================================
+
+  const compositePlans = buildCompositeScenarioPlans(
+    scoredSpecialized,
+    diagnosis,
+    base.selectedRouteKey
+  );
+
+  const evaluatedComposite = compositePlans.map((scenario) =>
+    evaluateScenario(base, scenario)
+  );
+
+  // ============================================================
+  // 第三阶段：专项候选 + 综合候选合并后统一复算改善诊断与评分
+  // ============================================================
+
+  const allEvaluated = [
+    ...evaluatedSpecialized,
+    ...evaluatedComposite
+  ];
+
+  const allWithImprovement = attachImprovementDiagnostics(
+    allEvaluated,
+    base.selectedRouteKey
+  );
+
+  const scored = scoreScenarios(
+    allWithImprovement,
+    context.input?.m4 || {}
+  );
+
   const recommendation = buildRecommendation(scored);
+
+  const summaryTitle =
+    recommendation.status === "finalized"
+      ? "最终工程方案定型已完成"
+      : recommendation.status === "improved_candidate"
+        ? "当前已形成有效折中改进候选"
+        : "当前方案边界内尚未形成有效定型解";
 
   return {
     contract: "M4Result",
     summary: {
-      title: "最终工程方案定型已完成",
+      title: summaryTitle,
       selectedRouteKey: base.selectedRouteKey,
       selectedRouteLabel: base.selectedRoute.label,
       scenarioCount: scored.length,
-      evaluationNote: "本版已接入 S0~S4 方案生成、压力月复验、全年复验与综合评分。PVUR 与 GFF 已作为年度方案评价指标正式纳入推荐逻辑。"
+      evaluationNote: "本版已接入方案族候选生成、压力月复验、全年复验、相对 S0 的专项改善诊断、基于有效专项候选的 S4 综合方案生成与综合评分。PVUR 与 GFF 已作为年度方案评价指标纳入推荐逻辑。"
     },
     residualDiagnosis: diagnosis,
     scenarios: scored,

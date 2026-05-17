@@ -94,34 +94,120 @@ export function isM4ScenarioFeasible(scenario) {
   );
 }
 
+function isMeaningfulImprovedScenario(scenario) {
+  return scenario?.familyEffectiveness?.isMeaningful === true;
+}
+
+function pickBalancedImprovedCandidate(candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+  const rankedByImprovement = [...candidates].sort((a, b) => {
+    const aRate = safeNumber(a.familyEffectiveness?.primaryReductionRate, -Infinity);
+    const bRate = safeNumber(b.familyEffectiveness?.primaryReductionRate, -Infinity);
+    return bRate - aRate;
+  });
+
+  const bestImprovementRate =
+    safeNumber(
+      rankedByImprovement[0]?.familyEffectiveness?.primaryReductionRate,
+      -Infinity
+    );
+
+  const nearBestCandidates = rankedByImprovement.filter((scenario) => {
+    const rate = safeNumber(
+      scenario.familyEffectiveness?.primaryReductionRate,
+      -Infinity
+    );
+
+    return bestImprovementRate - rate <= 0.05;
+  });
+
+  return [...nearBestCandidates].sort((a, b) =>
+    safeNumber(b.recommendation?.totalScore, 0) -
+    safeNumber(a.recommendation?.totalScore, 0)
+  )[0] || rankedByImprovement[0] || null;
+}
+
 export function buildRecommendation(scored) {
   const feasible = scored.filter((s) => isM4ScenarioFeasible(s));
-  const pool = feasible.length > 0 ? feasible : scored;
-  const isFallback = feasible.length === 0;
+  const meaningfulImproved = scored.filter((s) =>
+    isMeaningfulImprovedScenario(s)
+  );
 
-  const recommendation = pool[0] || null;
+  let status = "no_effective_solution";
+  let recommendation = null;
+  let pool = scored;
+  let explanation = "当前未生成可推荐方案。";
+
+  if (feasible.length > 0) {
+    status = "finalized";
+    pool = feasible;
+    recommendation = feasible[0] || null;
+
+    explanation = recommendation
+      ? `综合推荐 ${recommendation.id}：该方案已满足当前硬可行性约束，并在风险修复、追加投资与运行指标之间取得了当前候选集下的最佳平衡。`
+      : "当前存在硬可行方案，但未能选出最终推荐。";
+  } else if (meaningfulImproved.length > 0) {
+    status = "improved_candidate";
+    pool = meaningfulImproved;
+    recommendation = pickBalancedImprovedCandidate(meaningfulImproved);
+
+    const familyLabel =
+      recommendation?.family === "S1"
+        ? "功率侧"
+        : recommendation?.family === "S2"
+          ? "能量/SOC 侧"
+          : recommendation?.family === "S3"
+            ? "服务侧"
+            : "专项";
+
+    const metricLabel =
+      recommendation?.familyEffectiveness?.primaryMetricLabel || "主导风险指标";
+
+    const improveRate =
+      recommendation?.familyEffectiveness?.primaryReductionRate;
+
+    explanation = recommendation
+      ? `当前无方案完全满足硬可行性约束，${recommendation.id} 被选为本轮折中改进候选。该方案属于${familyLabel}有效加固方案，对"${metricLabel}"形成了${Number.isFinite(improveRate) ? `${round(improveRate * 100, 1)}%` : "较明显"}改善；推荐逻辑优先保留接近最佳风险改善幅度的候选，再在其中选择综合评分更均衡者。`
+      : "当前无硬可行方案，但已识别到部分有效改善候选。";
+  } else {
+    status = "no_effective_solution";
+    pool = scored;
+    recommendation = null;
+
+    explanation =
+      "当前候选方案中既没有满足硬可行性约束的定型方案，也没有形成足够明确的专项风险改善。建议扩大方案搜索边界、调整技术路线，或重新审视当前工程约束。";
+  }
+
   const lowInvestment = [...pool].sort((a, b) =>
     safeNumber(a.extraCapexWan, 0) - safeNumber(b.extraCapexWan, 0)
   )[0] || null;
+
   const highProtection = [...pool].sort((a, b) => {
-    const aRisk = safeNumber(a.annualValidation.totalUnmetKwh, 0) + safeNumber(a.annualValidation.totalOverflowCount, 0) * 100;
-    const bRisk = safeNumber(b.annualValidation.totalUnmetKwh, 0) + safeNumber(b.annualValidation.totalOverflowCount, 0) * 100;
+    const aRisk =
+      safeNumber(a.annualValidation?.totalUnmetKwh, 0) +
+      safeNumber(a.annualValidation?.totalOverflowCount, 0) * 100;
+
+    const bRisk =
+      safeNumber(b.annualValidation?.totalUnmetKwh, 0) +
+      safeNumber(b.annualValidation?.totalOverflowCount, 0) * 100;
+
     return aRisk - bRisk;
   })[0] || null;
 
-  const explanation = recommendation
-    ? (isFallback
-        ? `当前无方案完全满足硬可行性约束，${recommendation.id} 为候选中的相对最优方案。该方案仍存在部分残余风险，建议进一步调整工程边界或扩展方案库。`
-        : `综合推荐 ${recommendation.id}：硬可行方案中综合评分最高，在风险修复、追加投资与运行指标之间取得了当前版本下的最佳平衡。`)
-    : "当前未生成可推荐方案。";
-
   return {
+    status,
     recommendedScenarioId: recommendation?.id || null,
     recommendedScenarioTitle: recommendation?.title || null,
+    recommendedScenarioFamily: recommendation?.family || null,
+
     lowInvestmentScenarioId: lowInvestment?.id || null,
     highProtectionScenarioId: highProtection?.id || null,
-    isFallbackRecommendation: isFallback,
+
+    isFallbackRecommendation: status !== "finalized",
     feasibleCount: feasible.length,
+    meaningfulImprovedCount: meaningfulImproved.length,
+
     explanation
   };
 }

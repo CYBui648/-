@@ -10,52 +10,59 @@ function safeNumber(value, fallback = 0) {
   return Number.isFinite(Number(value)) ? Number(value) : fallback;
 }
 
-function ceilTo(value, step) {
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.ceil(value / step) * step;
+function ceilToStep(value, step) {
+  const safeValue = safeNumber(value, 0);
+  const safeStep = Math.max(1, safeNumber(step, 1));
+  return Math.ceil(safeValue / safeStep) * safeStep;
 }
 
-function applyPowerDeltaByLevel(baseDelta, level) {
-  if (level === "low") return Math.max(0, ceilTo(baseDelta * 0.4, 25));
-  if (level === "high") return Math.max(0, ceilTo(baseDelta * 0.9, 25));
-  return Math.max(0, ceilTo(baseDelta * 0.65, 25)); // medium (default)
+function uniqueSortedPositive(values) {
+  return [...new Set(
+    values
+      .map((value) => safeNumber(value, 0))
+      .filter((value) => value > 0)
+  )].sort((a, b) => a - b);
 }
 
-function applyEnergyDeltaByLevel(baseDelta, level) {
-  if (level === "low") return Math.max(0, ceilTo(baseDelta * 0.4, 50));
-  if (level === "high") return Math.max(0, ceilTo(baseDelta * 0.9, 50));
-  return Math.max(0, ceilTo(baseDelta * 0.65, 50)); // medium
-}
+function buildAdaptiveTransformerCandidates(transformerGapKw) {
+  const diagnosedGap = safeNumber(transformerGapKw, 0);
 
-function applyServiceDeltaByLevel(baseDelta, level) {
-  if (level === "low") return Math.max(1, Math.ceil(baseDelta * 0.35));
-  if (level === "high") return Math.max(1, Math.ceil(baseDelta * 0.9));
-  return Math.max(1, Math.ceil(baseDelta * 0.65)); // medium
-}
+  const anchorGapKw = diagnosedGap > 0 ? diagnosedGap : 25;
 
-function floorByRiskLevel(level, low, medium, high) {
-  if (level === "high") return high;
-  if (level === "medium") return medium;
-  if (level === "low") return low;
-  return 0;
+  const stepKw =
+    anchorGapKw <= 40
+      ? 5
+      : anchorGapKw <= 120
+        ? 10
+        : 25;
+
+  const rawCandidates = [0.4, 0.7, 1.0, 1.3].map((factor) =>
+    ceilToStep(anchorGapKw * factor, stepKw)
+  );
+
+  const candidates = uniqueSortedPositive(rawCandidates);
+
+  while (candidates.length < 4) {
+    const last = candidates[candidates.length - 1] || stepKw;
+    candidates.push(last + stepKw);
+  }
+
+  return candidates;
 }
 
 export function buildScenarioPlans(base, diagnosis) {
-  const pvBase = base.config.P_pv;
-  const essBase = base.config.E_storage;
-  const pcsBase = base.config.P_storage;
   const routeKey = base.selectedRouteKey;
+
   const residualUnmet = safeNumber(diagnosis.residualUnmetKwh, 0);
   const residualQueue = safeNumber(diagnosis.residualQueueUnmetKwh, 0);
   const transformerGap = safeNumber(diagnosis.transformerGapKw, 0);
+
   const powerRisk = diagnosis.powerRisk || {};
   const energyRisk = diagnosis.energyRisk || {};
   const storageRisk = diagnosis.storageRisk || {};
   const accessPortRisk = diagnosis.accessPortRisk || {};
-  const matrixPowerRisk = diagnosis.matrixPowerRisk || {};
   const deliveryServiceRisk = diagnosis.deliveryServiceRisk || {};
 
-  // Round 7：年度原始指标，用于 triggerBasis 解释
   const annualTotalUnmet =
     safeNumber(diagnosis.annualTotalUnmetKwh, 0);
   const annualTotalQueueUnmet =
@@ -67,145 +74,46 @@ export function buildScenarioPlans(base, diagnosis) {
   const annualMonthsWithSocRisk =
     safeNumber(diagnosis.annualMonthsWithSocRisk, 0);
 
-  // Round 7：方案 sizing 驱动量
-  // 不直接把全年累计量当成压力月残差，
-  // 而是折算成"月均等效"后与压力月残差取更严重者。
-  const unmetSizingDriver =
-    Math.max(residualUnmet, annualTotalUnmet / 12);
-  const queueSizingDriver =
-    Math.max(residualQueue, annualTotalQueueUnmet / 12);
+  const zeroDeltas = () => ({
+    deltaPvKw: 0,
+    deltaStorageKwh: 0,
+    deltaPcsKw: 0,
+    deltaTransformerKw: 0,
+    deltaN7: 0,
+    deltaN30: 0,
+    deltaMatrix: 0
+  });
 
-  // Round 7：风险等级底座
-  const powerRiskFloor = floorByRiskLevel(
-    powerRisk.level,
-    25,
-    50,
-    75
-  );
-  const energyRiskFloor = floorByRiskLevel(
-    energyRisk.level,
-    75,
-    125,
-    200
-  );
-  const storageRiskFloor = floorByRiskLevel(
-    storageRisk.level,
-    100,
-    150,
-    250
-  );
+  const makeScenario = ({
+    id,
+    family,
+    title,
+    variantLabel,
+    intent,
+    triggerBasis,
+    deltas
+  }) => ({
+    id,
+    family,
+    title,
+    variantLabel,
+    intent,
+    triggerBasis,
+    deltas: { ...zeroDeltas(), ...(deltas || {}) }
+  });
 
-  const powerDelta = ceilTo(
-    Math.max(
-      transformerGap * 0.9,
-      pcsBase * 0.25,
-      powerRiskFloor
-    ),
-    25
-  );
+  const combinedEnergyLevel =
+    maxRiskLevel(energyRisk.level, storageRisk.level);
 
-  const energyDelta = ceilTo(
-    Math.max(
-      unmetSizingDriver * 0.05,
-      essBase * 0.35,
-      energyRiskFloor,
-      storageRiskFloor
-    ),
-    50
-  );
+  // ============================================================
+  // 1. 各方案族的统一解释口径
+  // ============================================================
 
-  const pvDelta = ceilTo(
-    Math.max(
-      unmetSizingDriver * 0.02,
-      energyRisk.active ? pvBase * 0.10 : 0
-    ),
-    25
-  );
-
-  // S3：传统桩看 deliveryServiceRisk，柔性矩阵看 accessPortRisk
-  const pileDelta = deliveryServiceRisk.active
-    ? Math.max(1, Math.ceil(queueSizingDriver / 600))
-    : 0;
-  const matrixDelta = accessPortRisk.active
-    ? Math.max(2, Math.ceil(queueSizingDriver / 900))
-    : 0;
-
-  const serviceDelta = routeKey === "traditional_pile"
-    ? {
-        deltaN7: pileDelta,
-        deltaN30: deliveryServiceRisk.active
-          ? Math.max(0, Math.ceil(pileDelta / 2))
-          : 0,
-        deltaMatrix: 0
-      }
-    : {
-        deltaN7: 0,
-        deltaN30: 0,
-        deltaMatrix: matrixDelta
-      };
-
-  // S4 综合平衡方案
-  const s4Deltas = { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 };
-
-  if (powerRisk.active && powerRisk.level) {
-    s4Deltas.deltaPcsKw = applyPowerDeltaByLevel(powerDelta, powerRisk.level);
-  }
-  if (
-    (energyRisk.active && energyRisk.level) ||
-    (storageRisk.active && storageRisk.level)
-  ) {
-    const combinedEnergyLevel = maxRiskLevel(energyRisk.level, storageRisk.level);
-    s4Deltas.deltaStorageKwh = applyEnergyDeltaByLevel(energyDelta, combinedEnergyLevel);
-    s4Deltas.deltaPvKw = energyRisk.active
-      ? applyEnergyDeltaByLevel(pvDelta, combinedEnergyLevel)
-      : 0;
-  }
-  // S4 服务扩容：传统桩看 deliveryServiceRisk，柔性矩阵看 accessPortRisk
-  if (routeKey === "traditional_pile") {
-    if (deliveryServiceRisk.active && deliveryServiceRisk.level) {
-      s4Deltas.deltaN7 = applyServiceDeltaByLevel(serviceDelta.deltaN7, deliveryServiceRisk.level);
-      s4Deltas.deltaN30 = applyServiceDeltaByLevel(serviceDelta.deltaN30, deliveryServiceRisk.level);
-    }
-  } else {
-    if (accessPortRisk.active && accessPortRisk.level) {
-      s4Deltas.deltaMatrix = applyServiceDeltaByLevel(
-        serviceDelta.deltaMatrix,
-        accessPortRisk.level
-      );
-    }
-  }
-
-  // 动态 intent 文案
-  const s1Intent = powerRisk.active
-    ? "针对并网功率越限或峰值功率瓶颈，优先增强 PCS / 功率支撑能力，压低运行边界风险。"
-    : "当前功率边界风险不突出，本方案保留为功率侧专项加固备选。";
-
-  const s2Intent =
-    energyRisk.active && storageRisk.active
-      ? "针对供电缺口与 SOC 安全边界双重风险，补充储能容量并辅以适度光伏增量。"
-      : energyRisk.active
-        ? "针对残余供电缺口，优先提升系统能量供给与日内搬移能力。"
-        : storageRisk.active
-          ? "针对最低 SOC 安全边界不足，优先补充储能韧性。"
-          : "当前能量风险不突出，本方案保留为能量侧专项加固备选。";
-
-  const s3Intent =
-    routeKey === "traditional_pile"
-      ? (
-          deliveryServiceRisk.active
-            ? "围绕传统桩站路线，补充固定桩位服务能力，缓解排队与接入服务损失。"
-            : "当前传统桩接入服务风险不突出，本方案不主动扩充固定桩位。"
-        )
-      : (
-          accessPortRisk.active
-            ? "围绕柔性调度路线，针对矩阵端口接入拥堵扩大 N_matrix，缓解车辆排队与接口不足。"
-            : "当前矩阵接口拥堵风险不突出，本方案不主动扩大 N_matrix。"
-        );
-
-  // triggerBasis 解释每个方案"为什么生成"（含年度风险来源）
   const s1TriggerBasis = [
     powerRisk.active ? `功率风险等级：${powerRisk.level}` : null,
-    transformerGap > 0 ? `压力月峰值超出变压器边界 ${round(transformerGap, 1)} kW` : null,
+    transformerGap > 0
+      ? `压力月峰值超出变压器边界 ${round(transformerGap, 1)} kW`
+      : null,
     diagnosis.residualOverflowCount > 0
       ? `压力月残余越限 ${diagnosis.residualOverflowCount} 次`
       : null,
@@ -259,59 +167,395 @@ export function buildScenarioPlans(base, diagnosis) {
             : null
         ].filter(Boolean);
 
-  const s4TriggerBasis = [
-    powerRisk.active ? `功率风险 ${powerRisk.level}` : null,
-    energyRisk.active ? `能量风险 ${energyRisk.level}` : null,
-    storageRisk.active ? `SOC 风险 ${storageRisk.level}` : null,
+  // ============================================================
+  // 2. 基准方案 S0
+  // ============================================================
 
-    routeKey === "traditional_pile" && deliveryServiceRisk.active
-      ? `接入服务风险 ${deliveryServiceRisk.level}`
-      : null,
-
-    routeKey !== "traditional_pile" && accessPortRisk.active
-      ? `矩阵接口拥堵风险 ${accessPortRisk.level}`
-      : null,
-
-    routeKey !== "traditional_pile" && matrixPowerRisk.active
-      ? `已识别功率池拥堵风险 ${matrixPowerRisk.level}，当前阶段暂不单独调整 P_matrix`
-      : null
-  ].filter(Boolean);
-
-  return [
-    {
+  const scenarios = [
+    makeScenario({
       id: "S0",
+      family: "S0",
       title: "S0 基准对照",
-      intent: "不新增硬件，保留 M3 已选路线，作为所有加固方案的比较基线。",
+      variantLabel: "基准",
+      intent: "不新增硬件，保留 M3 已选路线，作为所有加固候选的比较基线。",
       triggerBasis: ["作为基准对照方案，不针对残余风险新增硬件。"],
-      deltas: { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 }
-    },
-    {
-      id: "S1",
-      title: "S1 功率瓶颈加固",
-      intent: s1Intent,
-      triggerBasis: s1TriggerBasis.length > 0 ? s1TriggerBasis : ["无显著功率风险，保留为备选。"],
-      deltas: { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: powerDelta, deltaN7: 0, deltaN30: 0, deltaMatrix: 0 }
-    },
-    {
-      id: "S2",
-      title: "S2 储能韧性加固",
-      intent: s2Intent,
-      triggerBasis: s2TriggerBasis.length > 0 ? s2TriggerBasis : ["无显著能量/SOC 风险，保留为备选。"],
-      deltas: { deltaPvKw: pvDelta, deltaStorageKwh: energyDelta, deltaPcsKw: Math.min(powerDelta, 25), deltaN7: 0, deltaN30: 0, deltaMatrix: 0 }
-    },
-    {
-      id: "S3",
-      title: "S3 服务能力加固",
-      intent: s3Intent,
-      triggerBasis: s3TriggerBasis.length > 0 ? s3TriggerBasis : ["无显著接入拥堵，不扩大充电接口。"],
-      deltas: { deltaPvKw: 0, deltaStorageKwh: 0, deltaPcsKw: 0, ...serviceDelta }
-    },
-    {
-      id: "S4",
-      title: "S4 综合平衡方案",
-      intent: "按实际残余风险等级自适应组合功率、能量/SOC 与服务增量，避免一刀切中档配置。",
-      triggerBasis: s4TriggerBasis.length > 0 ? s4TriggerBasis : ["无显著残余风险，保持基准配置。"],
-      deltas: s4Deltas
-    }
+      deltas: zeroDeltas()
+    })
   ];
+
+  // ============================================================
+  // 3. S1：功率瓶颈加固候选族
+  // ============================================================
+
+  if (powerRisk.active) {
+    const transformerCandidates =
+      buildAdaptiveTransformerCandidates(transformerGap);
+
+    transformerCandidates.forEach((deltaTransformerKw, index) => {
+      scenarios.push(
+        makeScenario({
+          id: `S1-${index + 1}`,
+          family: "S1",
+          title: "S1 接入功率边界加固",
+          variantLabel: `接入容量 +${deltaTransformerKw} kW`,
+          intent:
+            "针对并网功率越限与接入边界不足，测试不同变压器 / 接入容量扩容档位对越限风险的修复效果。",
+          triggerBasis: [
+            ...s1TriggerBasis,
+            `候选档位：接入容量增量 ${deltaTransformerKw} kW`
+          ],
+          deltas: {
+            deltaTransformerKw
+          }
+        })
+      );
+    });
+  } else {
+    scenarios.push(
+      makeScenario({
+        id: "S1-0",
+        family: "S1",
+        title: "S1 接入功率边界加固",
+        variantLabel: "未触发",
+        intent: "当前功率边界风险不突出，本轮不主动生成接入容量扩容搜索候选。",
+        triggerBasis: ["无显著功率风险，保留为说明性占位方案。"],
+        deltas: zeroDeltas()
+      })
+    );
+  }
+
+  // ============================================================
+  // 4. S2：能量 / 储能韧性候选族
+  // ============================================================
+
+  if (energyRisk.active || storageRisk.active) {
+    const s2CandidatesByLevel = {
+      low: [
+        { deltaStorageKwh: 100, deltaPvKw: 0, deltaPcsKw: 0, label: "储能 +100 kWh" },
+        { deltaStorageKwh: 150, deltaPvKw: 25, deltaPcsKw: 0, label: "储能 +150 kWh / 光伏 +25 kW" }
+      ],
+      medium: [
+        { deltaStorageKwh: 150, deltaPvKw: 0, deltaPcsKw: 0, label: "储能 +150 kWh" },
+        { deltaStorageKwh: 250, deltaPvKw: 25, deltaPcsKw: 0, label: "储能 +250 kWh / 光伏 +25 kW" },
+        { deltaStorageKwh: 300, deltaPvKw: 50, deltaPcsKw: 25, label: "储能 +300 kWh / 光伏 +50 kW / PCS +25 kW" }
+      ],
+      high: [
+        { deltaStorageKwh: 200, deltaPvKw: 0, deltaPcsKw: 0, label: "储能 +200 kWh" },
+        { deltaStorageKwh: 300, deltaPvKw: 50, deltaPcsKw: 0, label: "储能 +300 kWh / 光伏 +50 kW" },
+        { deltaStorageKwh: 400, deltaPvKw: 75, deltaPcsKw: 25, label: "储能 +400 kWh / 光伏 +75 kW / PCS +25 kW" }
+      ]
+    };
+
+    const s2Candidates =
+      s2CandidatesByLevel[combinedEnergyLevel] ||
+      s2CandidatesByLevel.medium;
+
+    s2Candidates.forEach((candidate, index) => {
+      scenarios.push(
+        makeScenario({
+          id: `S2-${index + 1}`,
+          family: "S2",
+          title: "S2 储能韧性加固",
+          variantLabel: candidate.label,
+          intent: "围绕能量缺口与 SOC 韧性风险，测试不同储能、光伏及少量 PCS 组合的修复能力。",
+          triggerBasis: [
+            ...s2TriggerBasis,
+            `候选档位：${candidate.label}`
+          ],
+          deltas: {
+            deltaStorageKwh: candidate.deltaStorageKwh,
+            deltaPvKw: candidate.deltaPvKw,
+            deltaPcsKw: candidate.deltaPcsKw
+          }
+        })
+      );
+    });
+  } else {
+    scenarios.push(
+      makeScenario({
+        id: "S2-0",
+        family: "S2",
+        title: "S2 储能韧性加固",
+        variantLabel: "未触发",
+        intent: "当前能量与 SOC 风险不突出，本轮不主动生成储能加固搜索候选。",
+        triggerBasis: ["无显著能量/SOC 风险，保留为说明性占位方案。"],
+        deltas: zeroDeltas()
+      })
+    );
+  }
+
+  // ============================================================
+  // 5. S3：服务能力加固候选族
+  // ============================================================
+
+  if (routeKey === "traditional_pile") {
+    if (deliveryServiceRisk.active) {
+      const serviceCandidatesByLevel = {
+        low: [
+          { deltaN7: 2, deltaN30: 1, label: "7kW +2 / 30kW +1" },
+          { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" }
+        ],
+        medium: [
+          { deltaN7: 2, deltaN30: 1, label: "7kW +2 / 30kW +1" },
+          { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" },
+          { deltaN7: 6, deltaN30: 3, label: "7kW +6 / 30kW +3" }
+        ],
+        high: [
+          { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" },
+          { deltaN7: 8, deltaN30: 4, label: "7kW +8 / 30kW +4" },
+          { deltaN7: 12, deltaN30: 6, label: "7kW +12 / 30kW +6" }
+        ]
+      };
+
+      const serviceCandidates =
+        serviceCandidatesByLevel[deliveryServiceRisk.level] ||
+        serviceCandidatesByLevel.medium;
+
+      serviceCandidates.forEach((candidate, index) => {
+        scenarios.push(
+          makeScenario({
+            id: `S3-${index + 1}`,
+            family: "S3",
+            title: "S3 服务能力加固",
+            variantLabel: candidate.label,
+            intent: "围绕传统桩站路线，测试有限固定桩扩容阶梯对排队损失与服务交付风险的改善效果。",
+            triggerBasis: [
+              ...s3TriggerBasis,
+              `候选档位：${candidate.label}`
+            ],
+            deltas: {
+              deltaN7: candidate.deltaN7,
+              deltaN30: candidate.deltaN30
+            }
+          })
+        );
+      });
+    } else {
+      scenarios.push(
+        makeScenario({
+          id: "S3-0",
+          family: "S3",
+          title: "S3 服务能力加固",
+          variantLabel: "未触发",
+          intent: "当前传统桩服务风险不突出，本轮不主动生成固定桩扩容搜索候选。",
+          triggerBasis: ["无显著传统桩接入服务风险，保留为说明性占位方案。"],
+          deltas: zeroDeltas()
+        })
+      );
+    }
+  } else {
+    if (accessPortRisk.active) {
+      const matrixCandidatesByLevel = {
+        low: [
+          { deltaMatrix: 2, label: "N_matrix +2" },
+          { deltaMatrix: 4, label: "N_matrix +4" }
+        ],
+        medium: [
+          { deltaMatrix: 4, label: "N_matrix +4" },
+          { deltaMatrix: 6, label: "N_matrix +6" },
+          { deltaMatrix: 8, label: "N_matrix +8" }
+        ],
+        high: [
+          { deltaMatrix: 6, label: "N_matrix +6" },
+          { deltaMatrix: 10, label: "N_matrix +10" },
+          { deltaMatrix: 14, label: "N_matrix +14" }
+        ]
+      };
+
+      const matrixCandidates =
+        matrixCandidatesByLevel[accessPortRisk.level] ||
+        matrixCandidatesByLevel.medium;
+
+      matrixCandidates.forEach((candidate, index) => {
+        scenarios.push(
+          makeScenario({
+            id: `S3-${index + 1}`,
+            family: "S3",
+            title: "S3 服务能力加固",
+            variantLabel: candidate.label,
+            intent: "围绕柔性矩阵路线，测试不同接口扩容档位对矩阵端口拥堵风险的修复效果。",
+            triggerBasis: [
+              ...s3TriggerBasis,
+              `候选档位：${candidate.label}`
+            ],
+            deltas: {
+              deltaMatrix: candidate.deltaMatrix
+            }
+          })
+        );
+      });
+    } else {
+      scenarios.push(
+        makeScenario({
+          id: "S3-0",
+          family: "S3",
+          title: "S3 服务能力加固",
+          variantLabel: "未触发",
+          intent: "当前矩阵接口拥堵风险不突出，本轮不主动生成 N_matrix 扩容搜索候选。",
+          triggerBasis: ["无显著矩阵接口拥堵风险，保留为说明性占位方案。"],
+          deltas: zeroDeltas()
+        })
+      );
+    }
+  }
+
+  return scenarios;
+}
+
+export function buildCompositeScenarioPlans(
+  scoredSpecialized,
+  diagnosis,
+  routeKey
+) {
+  const safeList = Array.isArray(scoredSpecialized)
+    ? scoredSpecialized
+    : [];
+
+  const zeroDeltas = () => ({
+    deltaPvKw: 0,
+    deltaStorageKwh: 0,
+    deltaPcsKw: 0,
+    deltaTransformerKw: 0,
+    deltaN7: 0,
+    deltaN30: 0,
+    deltaMatrix: 0
+  });
+
+  const mergeDeltas = (scenarios) => {
+    const merged = zeroDeltas();
+
+    scenarios.forEach((scenario) => {
+      const d = scenario?.deltas || {};
+      merged.deltaPvKw += safeNumber(d.deltaPvKw, 0);
+      merged.deltaStorageKwh += safeNumber(d.deltaStorageKwh, 0);
+      merged.deltaPcsKw += safeNumber(d.deltaPcsKw, 0);
+      merged.deltaTransformerKw += safeNumber(d.deltaTransformerKw, 0);
+      merged.deltaN7 += safeNumber(d.deltaN7, 0);
+      merged.deltaN30 += safeNumber(d.deltaN30, 0);
+      merged.deltaMatrix += safeNumber(d.deltaMatrix, 0);
+    });
+
+    return merged;
+  };
+
+  const selectRepresentative = (family) => {
+    const candidates = safeList.filter((scenario) =>
+      scenario.family === family &&
+      scenario.familyEffectiveness?.isMeaningful === true
+    );
+
+    if (!candidates.length) return null;
+
+    const bestRate = Math.max(
+      ...candidates.map((scenario) =>
+        safeNumber(
+          scenario.familyEffectiveness?.primaryReductionRate,
+          -Infinity
+        )
+      )
+    );
+
+    const nearBest = candidates.filter((scenario) => {
+      const rate = safeNumber(
+        scenario.familyEffectiveness?.primaryReductionRate,
+        -Infinity
+      );
+
+      return bestRate - rate <= 0.05;
+    });
+
+    return [...nearBest].sort((a, b) =>
+      safeNumber(b.recommendation?.totalScore, 0) -
+      safeNumber(a.recommendation?.totalScore, 0)
+    )[0] || candidates[0];
+  };
+
+  const selectS1CompositePool = () => {
+    const candidates = safeList.filter((scenario) =>
+      scenario.family === "S1" &&
+      scenario.familyEffectiveness?.isMeaningful === true
+    );
+
+    if (!candidates.length) return [];
+
+    const sorted = [...candidates].sort((a, b) =>
+      safeNumber(a.deltas?.deltaTransformerKw, 0) -
+      safeNumber(b.deltas?.deltaTransformerKw, 0)
+    );
+
+    if (sorted.length <= 3) {
+      return sorted;
+    }
+
+    const first = sorted[0];
+    const middle = sorted[Math.floor((sorted.length - 1) / 2)];
+    const last = sorted[sorted.length - 1];
+
+    return [first, middle, last].filter(
+      (scenario, index, array) =>
+        array.findIndex((item) => item.id === scenario.id) === index
+    );
+  };
+
+  const representativeS1 = selectRepresentative("S1");
+  const representativeS2 = selectRepresentative("S2");
+  const representativeS3 = selectRepresentative("S3");
+
+  const s1CompositePool = selectS1CompositePool();
+
+  const reps = {
+    S1: representativeS1,
+    S2: representativeS2,
+    S3: representativeS3
+  };
+
+  const activeFamilies = Object.entries(reps)
+    .filter(([, scenario]) => Boolean(scenario))
+    .map(([family]) => family);
+
+  // 至少需要两类专项风险都形成有效候选，才生成综合方案
+  if (activeFamilies.length < 2) {
+    return [];
+  }
+
+  const pairSpecs = [];
+
+  if (representativeS1 && representativeS2) {
+    pairSpecs.push([representativeS1, representativeS2]);
+  }
+
+  if (s1CompositePool.length > 0 && representativeS3) {
+    s1CompositePool.forEach((s1Scenario) => {
+      pairSpecs.push([s1Scenario, representativeS3]);
+    });
+  }
+
+  if (representativeS2 && representativeS3) {
+    pairSpecs.push([representativeS2, representativeS3]);
+  }
+
+  return pairSpecs.map((pair, index) => {
+    const [a, b] = pair;
+    const mergedDeltas = mergeDeltas(pair);
+
+    return {
+      id: `S4-${index + 1}`,
+      family: "S4",
+      title: "S4 综合平衡方案",
+      variantLabel: `${a.id} + ${b.id}`,
+      intent:
+        "将两个已通过专项复验、且对主导风险形成有效改善的加固方向进行组合，检验联合加固是否带来更均衡的工程结果。",
+      triggerBasis: [
+        `组合来源：${a.id} + ${b.id}`,
+        "组合规则：仅组合已被仿真判定为有效改善的专项候选。",
+        a.familyEffectiveness?.note || null,
+        b.familyEffectiveness?.note || null
+      ].filter(Boolean),
+      deltas: mergedDeltas,
+      compositeMeta: {
+        componentScenarioIds: [a.id, b.id],
+        componentFamilies: [a.family, b.family]
+      }
+    };
+  });
 }

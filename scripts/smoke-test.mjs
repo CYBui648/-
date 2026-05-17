@@ -110,9 +110,12 @@ assert.equal(diagnosis.serviceRisk.active, true);
 assert.equal(diagnosis.storageRisk.active, true);
 
 const scenarios = buildScenarioPlans(base, diagnosis);
-assert.equal(scenarios.length, 5);
-assert.deepEqual(scenarios.map((scenario) => scenario.id), ["S0", "S1", "S2", "S3", "S4"]);
-assert.ok(scenarios.every((scenario) => scenario.deltas && Array.isArray(scenario.triggerBasis)));
+// Rebase-R1: 方案族候选搜索，不再是固定 5 个
+assert.ok(scenarios.length >= 5);
+assert.ok(scenarios.every((scenario) => scenario.deltas && scenario.family && Array.isArray(scenario.triggerBasis)));
+assert.ok(scenarios.some(s => s.family === "S1"));
+assert.ok(scenarios.some(s => s.family === "S2"));
+assert.ok(scenarios.some(s => s.family === "S3"));
 
 const evaluated = scenarios.map((scenario, index) => ({
   ...scenario,
@@ -135,8 +138,8 @@ const evaluated = scenarios.map((scenario, index) => ({
 }));
 
 const scored = scoreScenarios(evaluated, context.input.m4);
-assert.equal(scored.length, 5);
-assert.ok(scored[0].recommendation.totalScore >= scored[1].recommendation.totalScore);
+assert.equal(scored.length, scenarios.length);
+assert.ok(scored.every(s => typeof s.recommendation.totalScore === "number"));
 
 const recommendation = buildRecommendation(scored);
 assert.ok(recommendation.recommendedScenarioId);

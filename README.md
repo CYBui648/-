@@ -53,6 +53,15 @@ M1 真实规划
 - 图表与方案解释卡片
 - M4 敏感性分析
 
+## 开发检查
+重构或调整 M4 逻辑后，可以先运行一个轻量 smoke test：
+
+```bash
+node scripts/smoke-test.mjs
+```
+
+该脚本不会跑完整全年仿真，只检查 M4 拆分模块、推荐逻辑和 Worker 依赖链是否还能正常加载。
+
 
 ## V2-4.1 热修复
 - 修复 `dom.js` 中 `m4Summary` 被误嵌套进 `m3Summary` 的问题

@@ -558,9 +558,19 @@ function runFlexibleMatrixDispatch(payload) {
       pvSeries[tick] = pvPower;
       totalPvGen += pvPower * 0.25;
 
-      // Remove departed vehicles from connected and queue
+      // Release matrix ports when charging is complete; count unmet energy if a connected EV must leave early.
       for (let i = connected.length - 1; i >= 0; i--) {
-        if (connected[i].leaveTick <= tick) connected.splice(i, 1);
+        const ev = connected[i];
+        const done = ev.deliveredEnergy >= ev.energyNeed + (ev.v2gBorrowed || 0) - 0.001;
+        const mustLeave = ev.leaveTick <= tick;
+        if (done || mustLeave) {
+          if (mustLeave && !done) {
+            const gap = Math.max(0, ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0));
+            unmetTotal += gap;
+          }
+          ev.closed = true;
+          connected.splice(i, 1);
+        }
       }
       for (let i = matrixQueue.length - 1; i >= 0; i--) {
         if (matrixQueue[i].leaveTick <= tick) {
@@ -844,7 +854,19 @@ function runFlexibleMatrixAnnualDispatch(payload) {
       monthStat.pvGenEnergy += pvPower * 0.25;
 
       for (let i = connected.length - 1; i >= 0; i--) {
-        if (connected[i].leaveTick <= tick) connected.splice(i, 1);
+        const ev = connected[i];
+        const done = ev.deliveredEnergy >= ev.energyNeed + (ev.v2gBorrowed || 0) - 0.001;
+        const mustLeave = ev.leaveTick <= tick;
+        if (done || mustLeave) {
+          if (mustLeave && !done) {
+            const gap = Math.max(0, ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0));
+            unmetTotal += gap;
+            monthStat.unmetTotal += gap;
+          }
+          ev.closed = true;
+          writeBackFixedCarSoc(ev);
+          connected.splice(i, 1);
+        }
       }
       for (let i = matrixQueue.length - 1; i >= 0; i--) {
         if (matrixQueue[i].leaveTick <= tick) {

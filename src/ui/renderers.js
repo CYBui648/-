@@ -412,7 +412,9 @@ function renderM3Summary(state) {
 
   el.flexPeak.textContent = `${formatNumber(flexible.result.realPeakKw, 1)} kW`;
   el.flexUnmet.textContent = `${formatNumber(flexible.result.unmetTotalKwh, 1)} kWh`;
-  el.flexNMatrix.textContent = String(flexible.matrixSizing.recommended);
+  el.flexNMatrix.textContent = flexible.matrixSizing.dailyAccessDemand
+    ? `${flexible.matrixSizing.recommended}（日均 ${formatNumber(flexible.matrixSizing.dailyAccessDemand, 1)}）`
+    : String(flexible.matrixSizing.recommended);
   el.flexStatus.textContent = flexible.handoffToM4.needsHardwareReinforcement ? "需要" : "不需要";
 
   const tradSelected = selectedRouteKey === "traditional_pile";

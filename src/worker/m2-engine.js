@@ -443,6 +443,9 @@ function mapToM2Result(raw, params, upstreamM1) {
   const transformerUtilPct = params.transformerLimit > 0
     ? raw.realPeak / params.transformerLimit * 100
     : 0;
+  const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const pressureMonthDays = monthDays[params.monthIndex] || 30;
+  const dailyAccessDemand = pressureMonthDays > 0 ? raw.ledgerCount / pressureMonthDays : 0;
 
   return {
     contract: "M2Result",
@@ -483,6 +486,9 @@ function mapToM2Result(raw, params, upstreamM1) {
       curtailmentRatePct: round(raw.curtailmentRate, 2)
     },
     occupancyReference: {
+      monthlyAccessDemand: raw.ledgerCount,
+      dailyAccessDemand: round(dailyAccessDemand, 1),
+      recommendedMatrixByDailyAccess: Math.ceil(dailyAccessDemand),
       virtualFastP95: round(raw.virtualFastP95, 1),
       virtualFastP99: round(raw.virtualFastP99, 1),
       virtualSlowP95: round(raw.virtualSlowP95, 1),

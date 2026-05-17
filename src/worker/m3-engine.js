@@ -287,9 +287,19 @@ function runFlexibleMatrixDispatch(payload) {
       pvSeries[tick] = pvPower;
       totalPvGen += pvPower * 0.25;
 
-      // Remove departed vehicles from connected and queue
+      // Release matrix ports when charging is complete; count unmet energy if a connected EV must leave early.
       for (let i = connected.length - 1; i >= 0; i--) {
-        if (connected[i].leaveTick <= tick) connected.splice(i, 1);
+        const ev = connected[i];
+        const done = ev.deliveredEnergy >= ev.energyNeed + (ev.v2gBorrowed || 0) - 0.001;
+        const mustLeave = ev.leaveTick <= tick;
+        if (done || mustLeave) {
+          if (mustLeave && !done) {
+            const gap = Math.max(0, ev.energyNeed + (ev.v2gBorrowed || 0) - (ev.deliveredEnergy || 0));
+            unmetTotal += gap;
+          }
+          ev.closed = true;
+          connected.splice(i, 1);
+        }
       }
       for (let i = matrixQueue.length - 1; i >= 0; i--) {
         if (matrixQueue[i].leaveTick <= tick) {
@@ -685,12 +695,21 @@ function runDispatchAssessment(payload) {
         useV2G: false
       }
     });
-    // N_matrix = fixed-car concurrent demand p99 from M2 (fixedReadyConcurrency)
+    // N_matrix should cover the pressure-month average daily access demand first,
+    // then use fixed-car concurrent demand as the lower-bound safety reference.
     const m2Baseline = payload.baseline?.m2 || {};
-    const nMatrixP95 = m2Baseline.fixedReadyP95 || Math.ceil((m2Baseline.virtualFastP95 || 0) + (m2Baseline.virtualSlowP95 || 0));
-    const nMatrixP99 = m2Baseline.fixedReadyP99 || Math.ceil((m2Baseline.virtualFastP99 || 0) + (m2Baseline.virtualSlowP99 || 0));
-    const nMatrixMax = m2Baseline.fixedReadyMax || Math.ceil((m2Baseline.chargingPeak || 0) + (m2Baseline.queuedPeak || 0));
-    const nMatrix = nMatrixP99 > 0 ? nMatrixP99 : (basePayload.config.n7 + basePayload.config.n30);
+    const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    const pressureMonthDays = monthDays[payload.params?.monthIndex] || 30;
+    const fixedP95 = m2Baseline.fixedReadyP95 || Math.ceil((m2Baseline.virtualFastP95 || 0) + (m2Baseline.virtualSlowP95 || 0));
+    const fixedP99 = m2Baseline.fixedReadyP99 || Math.ceil((m2Baseline.virtualFastP99 || 0) + (m2Baseline.virtualSlowP99 || 0));
+    const fixedMax = m2Baseline.fixedReadyMax || Math.ceil((m2Baseline.chargingPeak || 0) + (m2Baseline.queuedPeak || 0));
+    const dailyAccessDemand = Number(m2Baseline.dailyAccessDemand) ||
+      (Number(m2Baseline.ledgerCount || m2Baseline.monthlyAccessDemand || 0) / pressureMonthDays);
+    const dailyAccessMatrix = Number(m2Baseline.recommendedMatrixByDailyAccess) || Math.ceil(dailyAccessDemand || 0);
+    const nMatrixP95 = Math.max(fixedP95, Math.ceil(dailyAccessMatrix * 0.8));
+    const nMatrixP99 = Math.max(fixedP99, dailyAccessMatrix);
+    const nMatrixMax = Math.max(fixedMax, dailyAccessMatrix);
+    const nMatrix = Math.max(nMatrixP99, basePayload.config.n7 + basePayload.config.n30);
 
     const flexible = runFlexibleMatrixDispatch({
       ...basePayload,
@@ -720,6 +739,8 @@ function runDispatchAssessment(payload) {
       nMatrixP95: nMatrixP95,
       nMatrixP99: nMatrixP99,
       nMatrixMax: nMatrixMax,
+      nMatrixDailyAccess: dailyAccessMatrix,
+      dailyAccessDemand: dailyAccessDemand,
       baseline: payload.baseline || null
     };
   }
@@ -740,6 +761,9 @@ function pickM2Baseline(m2Result) {
     fixedReadyP95: m2Result?.occupancyReference?.fixedReadyP95 || 0,
     fixedReadyP99: m2Result?.occupancyReference?.fixedReadyP99 || 0,
     fixedReadyMax: m2Result?.occupancyReference?.fixedReadyMax || 0,
+    monthlyAccessDemand: m2Result?.occupancyReference?.monthlyAccessDemand || 0,
+    dailyAccessDemand: m2Result?.occupancyReference?.dailyAccessDemand || 0,
+    recommendedMatrixByDailyAccess: m2Result?.occupancyReference?.recommendedMatrixByDailyAccess || 0,
     virtualFastP95: m2Result?.occupancyReference?.virtualFastP95 || 0,
     virtualFastP99: m2Result?.occupancyReference?.virtualFastP99 || 0,
     virtualSlowP95: m2Result?.occupancyReference?.virtualSlowP95 || 0,
@@ -875,7 +899,9 @@ function mapToM3Result(raw, payload, m2Result) {
       positioning: "M3 并列展示传统桩站调度与柔性调度两条可落地路线，不自动替用户做技术路线选择。",
       nMatrixP95: raw.nMatrixP95,
       nMatrixP99: raw.nMatrixP99,
-      nMatrixMax: raw.nMatrixMax
+      nMatrixMax: raw.nMatrixMax,
+      nMatrixDailyAccess: raw.nMatrixDailyAccess,
+      dailyAccessDemand: round(raw.dailyAccessDemand || 0, 1)
     },
     baselineFromM2: {
       monthName: m2Result?.summary?.monthName || "--",
@@ -900,6 +926,8 @@ function mapToM3Result(raw, payload, m2Result) {
           p95: raw.nMatrixP95,
           p99: raw.nMatrixP99,
           max: raw.nMatrixMax,
+          dailyAccess: raw.nMatrixDailyAccess,
+          dailyAccessDemand: round(raw.dailyAccessDemand || 0, 1),
           recommended: raw.nMatrix
         },
         result: flexibleSummary,

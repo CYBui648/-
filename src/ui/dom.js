@@ -122,9 +122,11 @@ m3Summary: {
   recommendScore: document.getElementById("m4-recommend-score"),
   recommendExplain: document.getElementById("m4-recommend-explain"),
   scenarioTableBody: document.getElementById("m4-scenario-table-body"),
+  scenarioSelect: document.getElementById("m4-scenario-select"),
   deltaPv: document.getElementById("m4-delta-pv"),
   deltaStorage: document.getElementById("m4-delta-storage"),
   deltaPcs: document.getElementById("m4-delta-pcs"),
+  deltaTransformer: document.getElementById("m4-delta-transformer"),
   deltaService: document.getElementById("m4-delta-service")
 }
 };

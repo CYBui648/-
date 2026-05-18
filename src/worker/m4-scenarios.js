@@ -438,124 +438,166 @@ export function buildCompositeScenarioPlans(
     return merged;
   };
 
-  const selectRepresentative = (family) => {
-    const candidates = safeList.filter((scenario) =>
+  const collectMeaningfulCandidates = (family) => {
+    return safeList.filter((scenario) =>
       scenario.family === family &&
       scenario.familyEffectiveness?.isMeaningful === true
     );
+  };
 
+  const pickLowInvestmentCandidate = (candidates) => {
     if (!candidates.length) return null;
 
-    const bestRate = Math.max(
-      ...candidates.map((scenario) =>
-        safeNumber(
-          scenario.familyEffectiveness?.primaryReductionRate,
-          -Infinity
-        )
-      )
-    );
+    return [...candidates].sort((a, b) => {
+      const capexDiff =
+        safeNumber(a.extraCapexWan, Infinity) -
+        safeNumber(b.extraCapexWan, Infinity);
 
-    const nearBest = candidates.filter((scenario) => {
-      const rate = safeNumber(
-        scenario.familyEffectiveness?.primaryReductionRate,
-        -Infinity
+      if (capexDiff !== 0) return capexDiff;
+
+      return (
+        safeNumber(b.familyEffectiveness?.primaryReductionRate, 0) -
+        safeNumber(a.familyEffectiveness?.primaryReductionRate, 0)
       );
-
-      return bestRate - rate <= 0.05;
-    });
-
-    return [...nearBest].sort((a, b) =>
-      safeNumber(b.recommendation?.totalScore, 0) -
-      safeNumber(a.recommendation?.totalScore, 0)
-    )[0] || candidates[0];
+    })[0];
   };
 
-  const selectS1CompositePool = () => {
-    const candidates = safeList.filter((scenario) =>
-      scenario.family === "S1" &&
-      scenario.familyEffectiveness?.isMeaningful === true
-    );
+  const pickBalancedCandidate = (candidates) => {
+    if (!candidates.length) return null;
 
-    if (!candidates.length) return [];
+    return [...candidates].sort((a, b) => {
+      const scoreDiff =
+        safeNumber(b.recommendation?.totalScore, 0) -
+        safeNumber(a.recommendation?.totalScore, 0);
 
-    const sorted = [...candidates].sort((a, b) =>
-      safeNumber(a.deltas?.deltaTransformerKw, 0) -
-      safeNumber(b.deltas?.deltaTransformerKw, 0)
-    );
+      if (scoreDiff !== 0) return scoreDiff;
 
-    if (sorted.length <= 3) {
-      return sorted;
-    }
-
-    const first = sorted[0];
-    const middle = sorted[Math.floor((sorted.length - 1) / 2)];
-    const last = sorted[sorted.length - 1];
-
-    return [first, middle, last].filter(
-      (scenario, index, array) =>
-        array.findIndex((item) => item.id === scenario.id) === index
-    );
+      return (
+        safeNumber(b.familyEffectiveness?.primaryReductionRate, 0) -
+        safeNumber(a.familyEffectiveness?.primaryReductionRate, 0)
+      );
+    })[0];
   };
 
-  const representativeS1 = selectRepresentative("S1");
-  const representativeS2 = selectRepresentative("S2");
-  const representativeS3 = selectRepresentative("S3");
+  const pickHighProtectionCandidate = (candidates) => {
+    if (!candidates.length) return null;
 
-  const s1CompositePool = selectS1CompositePool();
+    return [...candidates].sort((a, b) => {
+      const rateDiff =
+        safeNumber(b.familyEffectiveness?.primaryReductionRate, 0) -
+        safeNumber(a.familyEffectiveness?.primaryReductionRate, 0);
 
-  const reps = {
-    S1: representativeS1,
-    S2: representativeS2,
-    S3: representativeS3
+      if (rateDiff !== 0) return rateDiff;
+
+      return (
+        safeNumber(a.extraCapexWan, Infinity) -
+        safeNumber(b.extraCapexWan, Infinity)
+      );
+    })[0];
   };
 
-  const activeFamilies = Object.entries(reps)
-    .filter(([, scenario]) => Boolean(scenario))
+  const familyCandidatePools = {
+    S1: collectMeaningfulCandidates("S1"),
+    S2: collectMeaningfulCandidates("S2"),
+    S3: collectMeaningfulCandidates("S3")
+  };
+
+  const activeFamilies = Object.entries(familyCandidatePools)
+    .filter(([, candidates]) => candidates.length > 0)
     .map(([family]) => family);
 
-  // 至少需要两类专项风险都形成有效候选，才生成综合方案
+  // 至少两类专项风险都形成有效改善，才生成综合工程候选族
   if (activeFamilies.length < 2) {
     return [];
   }
 
-  const pairSpecs = [];
-
-  if (representativeS1 && representativeS2) {
-    pairSpecs.push([representativeS1, representativeS2]);
-  }
-
-  if (s1CompositePool.length > 0 && representativeS3) {
-    s1CompositePool.forEach((s1Scenario) => {
-      pairSpecs.push([s1Scenario, representativeS3]);
-    });
-  }
-
-  if (representativeS2 && representativeS3) {
-    pairSpecs.push([representativeS2, representativeS3]);
-  }
-
-  return pairSpecs.map((pair, index) => {
-    const [a, b] = pair;
-    const mergedDeltas = mergeDeltas(pair);
-
-    return {
-      id: `S4-${index + 1}`,
-      family: "S4",
-      title: "S4 综合平衡方案",
-      variantLabel: `${a.id} + ${b.id}`,
+  const profileSpecs = [
+    {
+      profileKey: "low",
+      variantLabel: "低投资综合改善型",
       intent:
-        "将两个已通过专项复验、且对主导风险形成有效改善的加固方向进行组合，检验联合加固是否带来更均衡的工程结果。",
-      triggerBasis: [
-        `组合来源：${a.id} + ${b.id}`,
-        "组合规则：仅组合已被仿真判定为有效改善的专项候选。",
-        a.familyEffectiveness?.note || null,
-        b.familyEffectiveness?.note || null
-      ].filter(Boolean),
-      deltas: mergedDeltas,
-      compositeMeta: {
-        componentScenarioIds: [a.id, b.id],
-        componentFamilies: [a.family, b.family]
+        "在同时回应多个已验证有效的主导风险方向前提下，优先控制新增投资，形成低成本的综合改进候选。",
+      picker: pickLowInvestmentCandidate
+    },
+    {
+      profileKey: "balanced",
+      variantLabel: "均衡综合推荐型",
+      intent:
+        "在多个主导风险的联合改善、投资水平与综合评分之间寻求折中，形成当前更均衡的工程候选。",
+      picker: pickBalancedCandidate
+    },
+    {
+      profileKey: "high",
+      variantLabel: "高保障综合改善型",
+      intent:
+        "在同时回应多个已验证有效的主导风险方向前提下，优先追求更强的专项风险改善能力，形成高保障候选。",
+      picker: pickHighProtectionCandidate
+    }
+  ];
+
+  const compositeDrafts = profileSpecs
+    .map((profile) => {
+      const components = activeFamilies
+        .map((family) =>
+          profile.picker(familyCandidatePools[family])
+        )
+        .filter(Boolean);
+
+      if (components.length !== activeFamilies.length) {
+        return null;
       }
-    };
+
+      const mergedDeltas = mergeDeltas(components);
+      const componentScenarioIds = components.map((scenario) => scenario.id);
+      const componentFamilies = components.map((scenario) => scenario.family);
+
+      return {
+        family: "S4",
+        title: "S4 综合平衡方案",
+        variantLabel: profile.variantLabel,
+        intent: profile.intent,
+        triggerBasis: [
+          `综合覆盖方向：${componentFamilies.join(" + ")}`,
+          `组合来源：${componentScenarioIds.join(" + ")}`,
+          "生成规则：当前 S4 不再只做两两专项拼装，而是对所有已验证有效的主导风险方向进行同风格综合组合。",
+          ...components
+            .map((scenario) => scenario.familyEffectiveness?.note || null)
+            .filter(Boolean)
+        ],
+        deltas: mergedDeltas,
+        compositeMeta: {
+          profileKey: profile.profileKey,
+          componentScenarioIds,
+          componentFamilies
+        }
+      };
+    })
+    .filter(Boolean);
+
+  // 若低投资 / 均衡 / 高保障恰好选出完全一致的硬件组合，则去重
+  const uniqueDrafts = [];
+  const seenDeltaSignatures = new Set();
+
+  compositeDrafts.forEach((draft) => {
+    const d = draft.deltas || {};
+    const signature = [
+      safeNumber(d.deltaPvKw, 0),
+      safeNumber(d.deltaStorageKwh, 0),
+      safeNumber(d.deltaPcsKw, 0),
+      safeNumber(d.deltaTransformerKw, 0),
+      safeNumber(d.deltaN7, 0),
+      safeNumber(d.deltaN30, 0),
+      safeNumber(d.deltaMatrix, 0)
+    ].join("|");
+
+    if (seenDeltaSignatures.has(signature)) return;
+
+    seenDeltaSignatures.add(signature);
+    uniqueDrafts.push(draft);
   });
+
+  return uniqueDrafts.map((draft, index) => ({
+    id: `S4-${index + 1}`,
+    ...draft
+  }));
 }

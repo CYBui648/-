@@ -128,11 +128,37 @@ function pickBalancedImprovedCandidate(candidates) {
   )[0] || rankedByImprovement[0] || null;
 }
 
+function pickBestCompositeByTotalScore(candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+  return [...candidates].sort((a, b) =>
+    safeNumber(b.recommendation?.totalScore, 0) -
+    safeNumber(a.recommendation?.totalScore, 0)
+  )[0] || null;
+}
+
 export function buildRecommendation(scored) {
   const feasible = scored.filter((s) => isM4ScenarioFeasible(s));
+
   const meaningfulImproved = scored.filter((s) =>
     isMeaningfulImprovedScenario(s)
   );
+
+  const meaningfulSpecialized = meaningfulImproved.filter((s) =>
+    ["S1", "S2", "S3"].includes(s.family)
+  );
+
+  const meaningfulComposite = meaningfulImproved.filter((s) =>
+    s.family === "S4"
+  );
+
+  const activeMeaningfulFamilies = new Set(
+    meaningfulSpecialized.map((s) => s.family)
+  );
+
+  const shouldPrioritizeComposite =
+    activeMeaningfulFamilies.size >= 2 &&
+    meaningfulComposite.length > 0;
 
   let status = "no_effective_solution";
   let recommendation = null;
@@ -141,16 +167,28 @@ export function buildRecommendation(scored) {
 
   if (feasible.length > 0) {
     status = "finalized";
-    pool = feasible;
-    recommendation = feasible[0] || null;
+
+    const feasibleComposite = feasible.filter((s) => s.family === "S4");
+    pool =
+      shouldPrioritizeComposite && feasibleComposite.length > 0
+        ? feasibleComposite
+        : feasible;
+
+    recommendation = pool[0] || null;
 
     explanation = recommendation
       ? `综合推荐 ${recommendation.id}：该方案已满足当前硬可行性约束，并在风险修复、追加投资与运行指标之间取得了当前候选集下的最佳平衡。`
       : "当前存在硬可行方案，但未能选出最终推荐。";
   } else if (meaningfulImproved.length > 0) {
     status = "improved_candidate";
-    pool = meaningfulImproved;
-    recommendation = pickBalancedImprovedCandidate(meaningfulImproved);
+
+    pool = shouldPrioritizeComposite
+      ? meaningfulComposite
+      : meaningfulImproved;
+
+    recommendation = shouldPrioritizeComposite
+      ? pickBestCompositeByTotalScore(pool)
+      : pickBalancedImprovedCandidate(pool);
 
     const familyLabel =
       recommendation?.family === "S1"
@@ -159,7 +197,9 @@ export function buildRecommendation(scored) {
           ? "能量/SOC 侧"
           : recommendation?.family === "S3"
             ? "服务侧"
-            : "专项";
+            : recommendation?.family === "S4"
+              ? "综合"
+              : "专项";
 
     const metricLabel =
       recommendation?.familyEffectiveness?.primaryMetricLabel || "主导风险指标";
@@ -168,7 +208,9 @@ export function buildRecommendation(scored) {
       recommendation?.familyEffectiveness?.primaryReductionRate;
 
     explanation = recommendation
-      ? `当前无方案完全满足硬可行性约束，${recommendation.id} 被选为本轮折中改进候选。该方案属于${familyLabel}有效加固方案，对"${metricLabel}"形成了${Number.isFinite(improveRate) ? `${round(improveRate * 100, 1)}%` : "较明显"}改善；推荐逻辑优先保留接近最佳风险改善幅度的候选，再在其中选择综合评分更均衡者。`
+      ? shouldPrioritizeComposite
+        ? `当前无方案完全满足硬可行性约束，但已识别到多个主导风险方向同时需要回应，${recommendation.id} 被选为本轮综合折中改进候选。该方案属于${familyLabel}有效加固方案，对"${metricLabel}"形成了${Number.isFinite(improveRate) ? `${round(improveRate * 100, 1)}%` : "较明显"}改善；推荐逻辑在存在多类有效专项风险时，优先从综合方案族中选择，再在其中比较风险改善、追加投资与综合评分。`
+        : `当前无方案完全满足硬可行性约束，${recommendation.id} 被选为本轮折中改进候选。该方案属于${familyLabel}有效加固方案，对"${metricLabel}"形成了${Number.isFinite(improveRate) ? `${round(improveRate * 100, 1)}%` : "较明显"}改善；推荐逻辑优先保留接近最佳风险改善幅度的候选，再在其中选择综合评分更均衡者。`
       : "当前无硬可行方案，但已识别到部分有效改善候选。";
   } else {
     status = "no_effective_solution";

@@ -588,11 +588,26 @@
   </section>
 
   <article class="info-card m4-hardware-focus">
-    <h4>推荐方案需要补什么</h4>
+    <div class="m4-scenario-config-head">
+      <h4>方案配置查看</h4>
+
+      <label class="m4-scenario-picker">
+        <span>切换查看方案</span>
+        <select id="m4-scenario-select" disabled>
+          <option value="">M4 尚未运行</option>
+        </select>
+      </label>
+    </div>
+
+    <p class="helper-copy">
+      默认展示当前综合推荐方案；切换后，可查看任一候选方案分别增加了哪些硬件配置。
+    </p>
+
     <div class="diagnosis-grid">
       <div><span>追加 PV</span><strong id="m4-delta-pv">-- kW</strong></div>
       <div><span>追加储能</span><strong id="m4-delta-storage">-- kWh</strong></div>
       <div><span>追加 PCS</span><strong id="m4-delta-pcs">-- kW</strong></div>
+      <div><span>接入容量增量</span><strong id="m4-delta-transformer">-- kW</strong></div>
       <div><span>服务侧增量</span><strong id="m4-delta-service">--</strong></div>
     </div>
   </article>

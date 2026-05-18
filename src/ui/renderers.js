@@ -669,6 +669,46 @@ function renderM4HandoffBridge(el, selectedRoute, selectedAnnualResult, selected
   el.handoffTask.textContent = annualM4Focus;
 }
 
+function getM4ScenarioOptionLabel(scenario, recommendation) {
+  const isRecommended =
+    scenario.id === recommendation?.recommendedScenarioId;
+
+  const recommendationMark = isRecommended ? " ★ 综合推荐" : "";
+  const title = scenario.variantLabel || scenario.title || "候选方案";
+
+  return `${scenario.id}｜${title}${recommendationMark}`;
+}
+
+function renderM4ScenarioDeltaCards(el, scenario, routeKey) {
+  if (!scenario) {
+    el.deltaPv.textContent = "-- kW";
+    el.deltaStorage.textContent = "-- kWh";
+    el.deltaPcs.textContent = "-- kW";
+    el.deltaTransformer.textContent = "-- kW";
+    el.deltaService.textContent = "--";
+    return;
+  }
+
+  const d = scenario.deltas || {};
+
+  el.deltaPv.textContent =
+    `${formatNumber(d.deltaPvKw || 0, 1)} kW`;
+
+  el.deltaStorage.textContent =
+    `${formatNumber(d.deltaStorageKwh || 0, 1)} kWh`;
+
+  el.deltaPcs.textContent =
+    `${formatNumber(d.deltaPcsKw || 0, 1)} kW`;
+
+  el.deltaTransformer.textContent =
+    `${formatNumber(d.deltaTransformerKw || 0, 1)} kW`;
+
+  el.deltaService.textContent =
+    routeKey === "traditional_pile"
+      ? `7kW +${d.deltaN7 || 0} / 30kW +${d.deltaN30 || 0}`
+      : `N_matrix +${d.deltaMatrix || 0}`;
+}
+
 function renderM4Summary(state) {
   const result = state.stages.m4.result;
   const m3 = state.stages.m3.result;
@@ -705,11 +745,18 @@ function renderM4Summary(state) {
     el.recommendSafe.textContent = "--";
     el.recommendScore.textContent = "--";
     el.recommendExplain.textContent = "运行后，这里会解释为什么推荐该方案。";
-    el.scenarioTableBody.innerHTML = '<tr><td colspan="8">M4 尚未运行。</td></tr>';
-    el.deltaPv.textContent = "-- kW";
-    el.deltaStorage.textContent = "-- kWh";
-    el.deltaPcs.textContent = "-- kW";
-    el.deltaService.textContent = "--";
+    el.scenarioTableBody.innerHTML =
+      '<tr><td colspan="8">M4 尚未运行。</td></tr>';
+
+    if (el.scenarioSelect) {
+      el.scenarioSelect.innerHTML =
+        '<option value="">M4 尚未运行</option>';
+      el.scenarioSelect.disabled = true;
+      el.scenarioSelect.onchange = null;
+    }
+
+    renderM4ScenarioDeltaCards(el, null, selectedRouteKey);
+
     return;
   }
 
@@ -752,15 +799,60 @@ function renderM4Summary(state) {
     `;
   }).join("");
 
-  if (recommended) {
-    const d = recommended.deltas || {};
-    el.deltaPv.textContent = `${formatNumber(d.deltaPvKw || 0, 1)} kW`;
-    el.deltaStorage.textContent = `${formatNumber(d.deltaStorageKwh || 0, 1)} kWh`;
-    el.deltaPcs.textContent = `${formatNumber(d.deltaPcsKw || 0, 1)} kW`;
-    el.deltaService.textContent = summary.selectedRouteKey === "traditional_pile"
-      ? `7kW +${d.deltaN7 || 0} / 30kW +${d.deltaN30 || 0}`
-      : `N_matrix +${d.deltaMatrix || 0}`;
+  const defaultScenarioId =
+    recommendation.recommendedScenarioId ||
+    recommended?.id ||
+    scenarios[0]?.id ||
+    "";
+
+  const previousSelectedScenarioId =
+    el.scenarioSelect?.value || "";
+
+  const selectedScenarioId =
+    scenarios.some((scenario) => scenario.id === previousSelectedScenarioId)
+      ? previousSelectedScenarioId
+      : defaultScenarioId;
+
+  if (el.scenarioSelect) {
+    el.scenarioSelect.innerHTML = scenarios.map((scenario) => {
+      const selected =
+        scenario.id === selectedScenarioId ? " selected" : "";
+
+      return `
+        <option value="${scenario.id}"${selected}>
+          ${getM4ScenarioOptionLabel(scenario, recommendation)}
+        </option>
+      `;
+    }).join("");
+
+    el.scenarioSelect.disabled = scenarios.length === 0;
+
+    el.scenarioSelect.onchange = () => {
+      const scenario =
+        scenarios.find((item) => item.id === el.scenarioSelect.value) ||
+        recommended ||
+        scenarios[0] ||
+        null;
+
+      renderM4ScenarioDeltaCards(
+        el,
+        scenario,
+        summary.selectedRouteKey
+      );
+    };
   }
+
+  const selectedScenario =
+    scenarios.find((scenario) => scenario.id === selectedScenarioId) ||
+    recommended ||
+    scenarios[0] ||
+    null;
+
+  renderM4ScenarioDeltaCards(
+    el,
+    selectedScenario,
+    summary.selectedRouteKey
+  );
 }
 
 export function renderApp(state) {

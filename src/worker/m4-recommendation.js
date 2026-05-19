@@ -304,7 +304,7 @@ export function buildRecommendation(scored) {
     recommendation = pool[0] || null;
 
     explanation = recommendation
-      ? `综合推荐 ${recommendation.id}：该方案已满足当前硬可行性约束，并在风险修复、追加投资与运行指标之间取得了当前候选集下的最佳平衡。`
+      ? `主推荐 ${recommendation.id}：该方案已满足当前硬可行性约束，并在风险修复、追加投资与运行指标之间取得了当前候选集下的最佳平衡。`
       : "当前存在硬可行方案，但未能选出最终推荐。";
   } else if (meaningfulImproved.length > 0) {
     status = "improved_candidate";

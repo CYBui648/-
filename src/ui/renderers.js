@@ -144,7 +144,7 @@ function getM4FocusText(annual) {
   const overflowMonths = Number(annual?.monthsWithOverflow || 0);
   const socRiskMonths = Number(annual?.monthsWithSocRisk || 0);
 
-  if (socRiskMonths > 0 && totalUnmet > 0) return "优先补储能韧性与服务交付";
+  if (socRiskMonths > 0 && totalUnmet > 0) return "重点评估服务交付与储能韧性";
   if (overflowMonths > 0) return "优先压降功率越限风险";
   if (serviceRate < 0.95 || totalUnmet > 0) return "优先修复全年服务缺口";
   return "重点比较工程代价与稳健性";
@@ -673,7 +673,7 @@ function getM4ScenarioOptionLabel(scenario, recommendation) {
   const isRecommended =
     scenario.id === recommendation?.recommendedScenarioId;
 
-  const recommendationMark = isRecommended ? " ★ 综合推荐" : "";
+  const recommendationMark = isRecommended ? " ★ 主推荐" : "";
   const title = scenario.variantLabel || scenario.title || "候选方案";
 
   return `${scenario.id}｜${title}${recommendationMark}`;

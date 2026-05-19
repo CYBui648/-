@@ -48,6 +48,598 @@ function resetAnnualChart(container, emptyText = "暂无数据") {
   container.innerHTML = `<div class="annual-chart-empty">${emptyText}</div>`;
 }
 
+function resetInsightChart(container, emptyText = "暂无数据") {
+  if (!container) return;
+  container.innerHTML = `<div class="insight-chart-empty">${emptyText}</div>`;
+}
+
+function toAverageDaySeries(series, pointsPerDay = 96) {
+  if (!Array.isArray(series) || series.length === 0) return [];
+
+  const sums = Array(pointsPerDay).fill(0);
+  const counts = Array(pointsPerDay).fill(0);
+
+  series.forEach((value, index) => {
+    const bucket = index % pointsPerDay;
+    const n = Number(value || 0);
+    sums[bucket] += n;
+    counts[bucket] += 1;
+  });
+
+  return sums.map((sum, index) => counts[index] ? sum / counts[index] : 0);
+}
+
+function svgPolyline(values, xScale, yScale) {
+  return values
+    .map((value, index) => `${xScale(index)},${yScale(value)}`)
+    .join(" ");
+}
+
+function downsampleSeries(values, maxPoints = 180) {
+  if (!Array.isArray(values) || values.length <= maxPoints) return values || [];
+
+  const step = Math.ceil(values.length / maxPoints);
+  const sampled = [];
+
+  for (let i = 0; i < values.length; i += step) {
+    const chunk = values.slice(i, i + step).map((value) => Number(value || 0));
+    const avg = chunk.reduce((sum, value) => sum + value, 0) / Math.max(1, chunk.length);
+    sampled.push(avg);
+  }
+
+  return sampled;
+}
+
+function sliceSeriesWindow(values, startIndex, endIndex) {
+  if (!Array.isArray(values) || values.length === 0) return [];
+  return values.slice(startIndex, Math.max(startIndex + 2, endIndex));
+}
+
+const WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+function clampWindowRange(startPct, endPct, minSpanPct) {
+  let nextStart = Number.isFinite(startPct) ? startPct : 0;
+  let nextEnd = Number.isFinite(endPct) ? endPct : 100;
+
+  if (nextEnd - nextStart < minSpanPct) nextEnd = nextStart + minSpanPct;
+  nextStart = Math.max(0, Math.min(100 - minSpanPct, nextStart));
+  nextEnd = Math.max(nextStart + minSpanPct, Math.min(100, nextEnd));
+
+  if (nextEnd > 100) {
+    const span = Math.max(minSpanPct, nextEnd - nextStart);
+    nextEnd = 100;
+    nextStart = Math.max(0, nextEnd - span);
+  }
+
+  return { start: nextStart, end: nextEnd, span: nextEnd - nextStart };
+}
+
+function formatProfileTimeLabel(dayValue, totalDays) {
+  const clampedDay = Math.max(0, Math.min(Math.max(0, totalDays - 0.001), dayValue));
+  const dayIndex = Math.floor(clampedDay);
+  const hour = Math.floor((clampedDay - dayIndex) * 24);
+  const minute = Math.round((((clampedDay - dayIndex) * 24) - hour) * 60);
+  const timeLabel = `${hour}:${String(minute).padStart(2, "0")}`;
+
+  if (totalDays <= 7) {
+    const dayLabel = WEEKDAY_LABELS[Math.min(WEEKDAY_LABELS.length - 1, dayIndex)] || `D${dayIndex + 1}`;
+    return totalDays <= 2 ? `${dayLabel} ${timeLabel}` : dayLabel;
+  }
+
+  return totalDays <= 3 ? `D${dayIndex + 1} ${timeLabel}` : `D${dayIndex + 1}`;
+}
+
+function buildProfileTicks(startPct, endPct, totalDays, tickCount = 6) {
+  const spanPct = Math.max(0.001, endPct - startPct);
+  const count = Math.max(2, tickCount);
+
+  return Array.from({ length: count }, (_, index) => {
+    const ratio = index / (count - 1);
+    const dayValue = ((startPct + spanPct * ratio) / 100) * totalDays;
+    return {
+      ratio,
+      label: formatProfileTimeLabel(dayValue, totalDays)
+    };
+  });
+}
+
+function profileWindowTransform(startPct, endPct, left, plotWidth) {
+  const spanPct = Math.max(0.001, endPct - startPct);
+  const scaleX = 100 / spanPct;
+  const selectedStartX = left + (startPct / 100) * plotWidth;
+  const translateX = left - selectedStartX * scaleX;
+  return `matrix(${scaleX} 0 0 1 ${translateX} 0)`;
+}
+
+function renderSeriesProfileChart(container, series, options = {}) {
+  if (!container || !series) {
+    resetInsightChart(container, options.emptyText || "暂无功率曲线数据。");
+    return;
+  }
+
+  const loadRaw = Array.isArray(series.load) ? series.load.map((v) => Number(v || 0)) : [];
+  const pvRaw = Array.isArray(series.pv) ? series.pv.map((v) => Number(v || 0)) : [];
+  const gridRaw = Array.isArray(series.grid) ? series.grid.map((v) => Number(v || 0)) : [];
+  const socRaw = Array.isArray(series.soc) ? series.soc.map((v) => Number(v || 0)) : [];
+  const rawPointCount = Math.max(loadRaw.length, pvRaw.length, gridRaw.length, socRaw.length, 2);
+  const savedStart = Number(container.dataset.windowStart || 0);
+  const savedEnd = Number(container.dataset.windowEnd || 100);
+  const timelineDays = options.timelineDays || Math.max(1, rawPointCount / 96);
+  const minWindowPct = Math.max(100 / Math.max(1, timelineDays), 3);
+  let windowStartPct = Number.isFinite(options.windowStartPct) ? options.windowStartPct : savedStart;
+  let windowEndPct = Number.isFinite(options.windowEndPct) ? options.windowEndPct : (savedEnd || 100);
+  const initialWindow = clampWindowRange(windowStartPct, windowEndPct, minWindowPct);
+  windowStartPct = initialWindow.start;
+  windowEndPct = initialWindow.end;
+  container.dataset.windowStart = String(windowStartPct);
+  container.dataset.windowEnd = String(windowEndPct);
+
+  const maxPoints = options.maxPoints || Math.min(rawPointCount, 1600);
+  const load = downsampleSeries(loadRaw, maxPoints);
+  const pv = downsampleSeries(pvRaw, maxPoints);
+  const grid = downsampleSeries(gridRaw, maxPoints);
+  const soc = downsampleSeries(socRaw, maxPoints);
+
+  if (!load.length && !pv.length && !grid.length && !soc.length) {
+    resetInsightChart(container, options.emptyText || "暂无功率曲线数据。");
+    return;
+  }
+
+  const pointCount = Math.max(load.length, pv.length, grid.length, soc.length, 2);
+  const visibleDays = timelineDays * ((windowEndPct - windowStartPct) / 100);
+  const width = 960;
+  const height = 420;
+  const left = 68;
+  const right = 68;
+  const top = 38;
+  const bottom = 58;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const clipId = `profile-clip-${Math.random().toString(36).slice(2)}`;
+  const powerMax = Math.max(...load, ...pv, ...grid, Number(options.limitKw || 0), 1);
+  const socMax = 100;
+
+  const xScale = (index) => left + (index / Math.max(1, pointCount - 1)) * plotWidth;
+  const yPower = (value) => top + plotHeight - (Math.max(0, value) / powerMax) * plotHeight;
+  const ySoc = (value) => top + plotHeight - (Math.max(0, Math.min(socMax, value)) / socMax) * plotHeight;
+  const limitY = yPower(Number(options.limitKw || 0));
+
+  const ticks = options.tickBuilder
+    ? options.tickBuilder(windowStartPct, windowEndPct, timelineDays)
+    : buildProfileTicks(windowStartPct, windowEndPct, timelineDays);
+
+  const axisTicks = ticks.map((tick, index) => {
+    const x = left + tick.ratio * plotWidth;
+    return `
+      <line class="profile-grid" x1="${x}" y1="${top}" x2="${x}" y2="${top + plotHeight}" />
+      <text class="profile-axis-label profile-time-tick" data-profile-tick="${index}" x="${x}" y="${height - 22}">${tick.label}</text>
+    `;
+  }).join("");
+
+  const overviewWidth = 960;
+  const overviewHeight = 76;
+  const overviewLeft = 24;
+  const overviewRight = 24;
+  const overviewTop = 12;
+  const overviewBottom = 18;
+  const overviewPlotWidth = overviewWidth - overviewLeft - overviewRight;
+  const overviewPlotHeight = overviewHeight - overviewTop - overviewBottom;
+  const overviewSeries = downsampleSeries(loadRaw.length ? loadRaw : pvRaw, 360);
+  const overviewMax = Math.max(...overviewSeries, 1);
+  const overviewX = (index) => overviewLeft + (index / Math.max(1, overviewSeries.length - 1)) * overviewPlotWidth;
+  const overviewY = (value) => overviewTop + overviewPlotHeight - (Math.max(0, value) / overviewMax) * overviewPlotHeight;
+  const selectionX = overviewLeft + (windowStartPct / 100) * overviewPlotWidth;
+  const selectionWidth = ((windowEndPct - windowStartPct) / 100) * overviewPlotWidth;
+  const initialTransform = profileWindowTransform(windowStartPct, windowEndPct, left, plotWidth);
+
+  container.innerHTML = `
+    <div class="profile-toolbar">
+      <div>
+        <strong>${options.title || "功率曲线"}</strong>
+        <span>${options.subtitle || "拖动底部视窗查看不同时间段"}</span>
+      </div>
+      <div class="profile-actions">
+        <button type="button" data-profile-zoom="reset">全局</button>
+        <em data-profile-window-label>${formatNumber(visibleDays, 1)} 天</em>
+      </div>
+    </div>
+    <div class="profile-main-chart">
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="功率画像" data-profile-main-svg data-profile-width="${width}" data-profile-height="${height}">
+        <defs>
+          <clipPath id="${clipId}">
+            <rect x="${left}" y="${top - 6}" width="${plotWidth}" height="${plotHeight + 12}" />
+          </clipPath>
+        </defs>
+        <line class="profile-axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + plotHeight}" />
+        <line class="profile-axis" x1="${left}" y1="${top + plotHeight}" x2="${left + plotWidth}" y2="${top + plotHeight}" />
+        ${axisTicks}
+        <line class="profile-grid" x1="${left}" y1="${top}" x2="${left + plotWidth}" y2="${top}" />
+        <line class="profile-grid" x1="${left}" y1="${top + plotHeight / 2}" x2="${left + plotWidth}" y2="${top + plotHeight / 2}" />
+        <text class="profile-axis-label" x="8" y="${top + 4}">${formatNumber(powerMax, 0)} kW</text>
+        <text class="profile-axis-label" x="18" y="${top + plotHeight + 4}">0</text>
+        <text class="profile-axis-label" x="${width - 52}" y="${top + 4}">SOC 100%</text>
+        <text class="profile-axis-label" x="${width - 36}" y="${top + plotHeight + 4}">0%</text>
+        ${options.limitKw ? `
+          <line class="profile-limit" x1="${left}" y1="${limitY}" x2="${left + plotWidth}" y2="${limitY}" />
+          <text class="profile-limit-label" x="${left + plotWidth - 86}" y="${limitY - 6}">变压器红线</text>
+        ` : ""}
+        <g clip-path="url(#${clipId})">
+          <g data-profile-series-layer transform="${initialTransform}">
+            ${pv.length ? `<polyline class="profile-line pv" vector-effect="non-scaling-stroke" points="${svgPolyline(pv, xScale, yPower)}" />` : ""}
+            ${grid.length ? `<polyline class="profile-line grid" vector-effect="non-scaling-stroke" points="${svgPolyline(grid, xScale, yPower)}" />` : ""}
+            ${load.length ? `<polyline class="profile-line load" vector-effect="non-scaling-stroke" points="${svgPolyline(load, xScale, yPower)}" />` : ""}
+            ${soc.length ? `<polyline class="profile-line soc" vector-effect="non-scaling-stroke" points="${svgPolyline(soc, xScale, ySoc)}" />` : ""}
+          </g>
+        </g>
+      </svg>
+    </div>
+    <div class="profile-navigator">
+      <svg viewBox="0 0 ${overviewWidth} ${overviewHeight}" role="img" aria-label="全局预览">
+        <polyline class="profile-overview-line" points="${svgPolyline(overviewSeries, overviewX, overviewY)}" />
+        <rect class="profile-overview-mask left" x="${overviewLeft}" y="${overviewTop}" width="${Math.max(0, selectionX - overviewLeft)}" height="${overviewPlotHeight}" />
+        <rect class="profile-overview-mask right" x="${selectionX + selectionWidth}" y="${overviewTop}" width="${Math.max(0, overviewLeft + overviewPlotWidth - selectionX - selectionWidth)}" height="${overviewPlotHeight}" />
+        <rect class="profile-overview-window" x="${selectionX}" y="${overviewTop}" width="${selectionWidth}" height="${overviewPlotHeight}" />
+        <line class="profile-overview-handle" x1="${selectionX}" y1="${overviewTop - 4}" x2="${selectionX}" y2="${overviewTop + overviewPlotHeight + 4}" />
+        <line class="profile-overview-handle" x1="${selectionX + selectionWidth}" y1="${overviewTop - 4}" x2="${selectionX + selectionWidth}" y2="${overviewTop + overviewPlotHeight + 4}" />
+      </svg>
+      <div class="profile-range-controls">
+        <label>
+          <span>窗口</span>
+          <input type="range" min="0" max="${Math.max(0, 100 - (windowEndPct - windowStartPct))}" step="0.1" value="${windowStartPct}" data-profile-pan>
+        </label>
+      </div>
+    </div>
+    <div class="profile-legend">
+      <span><i class="legend-line load"></i>充电负荷</span>
+      <span><i class="legend-line pv"></i>光伏出力</span>
+      ${grid.length ? '<span><i class="legend-line grid"></i>购电功率</span>' : ""}
+      <span><i class="legend-line soc"></i>储能 SOC</span>
+      ${options.limitKw ? '<span><i class="legend-line limit"></i>变压器红线</span>' : ""}
+    </div>
+  `;
+
+  const updateWindow = (nextStart, nextEnd) => {
+    const nextWindow = clampWindowRange(nextStart, nextEnd, minWindowPct);
+    const span = nextWindow.span;
+    container.dataset.windowStart = String(nextWindow.start);
+    container.dataset.windowEnd = String(nextWindow.end);
+    container.querySelector("[data-profile-series-layer]")?.setAttribute(
+      "transform",
+      profileWindowTransform(nextWindow.start, nextWindow.end, left, plotWidth)
+    );
+    const windowLabel = container.querySelector("[data-profile-window-label]");
+    if (windowLabel) {
+      windowLabel.textContent = `${formatNumber(timelineDays * (span / 100), 1)} 天`;
+    }
+    updateAxisTicks(nextWindow.start, nextWindow.end);
+    updateNavigatorWindow(nextWindow.start, nextWindow.end);
+
+    if (panControl) {
+      panControl.max = String(Math.max(0, 100 - span));
+      panControl.value = String(nextWindow.start);
+    }
+  };
+
+  container.querySelectorAll("[data-profile-zoom='reset']").forEach((button) => {
+    button.addEventListener("click", () => {
+      updateWindow(0, 100);
+    });
+  });
+
+  const panControl = container.querySelector("[data-profile-pan]");
+  let panFrame = 0;
+  let pendingPanStart = windowStartPct;
+  const updateAxisTicks = (nextStart, nextEnd) => {
+    const nextTicks = options.tickBuilder
+      ? options.tickBuilder(nextStart, nextEnd, timelineDays)
+      : buildProfileTicks(nextStart, nextEnd, timelineDays);
+
+    nextTicks.forEach((tick, index) => {
+      const tickText = container.querySelector(`[data-profile-tick="${index}"]`);
+      if (!tickText) return;
+      tickText.setAttribute("x", String(left + tick.ratio * plotWidth));
+      tickText.textContent = tick.label;
+    });
+  };
+
+  const updateNavigatorWindow = (nextStart, nextEnd) => {
+    const nextSelectionX = overviewLeft + (nextStart / 100) * overviewPlotWidth;
+    const nextSelectionWidth = ((nextEnd - nextStart) / 100) * overviewPlotWidth;
+    const leftMask = container.querySelector(".profile-overview-mask.left");
+    const rightMask = container.querySelector(".profile-overview-mask.right");
+    const windowRect = container.querySelector(".profile-overview-window");
+    const handles = container.querySelectorAll(".profile-overview-handle");
+
+    leftMask?.setAttribute("width", String(Math.max(0, nextSelectionX - overviewLeft)));
+    rightMask?.setAttribute("x", String(nextSelectionX + nextSelectionWidth));
+    rightMask?.setAttribute("width", String(Math.max(0, overviewLeft + overviewPlotWidth - nextSelectionX - nextSelectionWidth)));
+    windowRect?.setAttribute("x", String(nextSelectionX));
+    windowRect?.setAttribute("width", String(nextSelectionWidth));
+    handles[0]?.setAttribute("x1", String(nextSelectionX));
+    handles[0]?.setAttribute("x2", String(nextSelectionX));
+    handles[1]?.setAttribute("x1", String(nextSelectionX + nextSelectionWidth));
+    handles[1]?.setAttribute("x2", String(nextSelectionX + nextSelectionWidth));
+  };
+
+  panControl?.addEventListener("input", () => {
+    const currentStart = Number(container.dataset.windowStart || windowStartPct);
+    const currentEnd = Number(container.dataset.windowEnd || windowEndPct);
+    const span = currentEnd - currentStart;
+    pendingPanStart = Number(panControl.value || 0);
+    if (panFrame) return;
+    panFrame = requestAnimationFrame(() => {
+      panFrame = 0;
+      updateWindow(pendingPanStart, pendingPanStart + span);
+    });
+  });
+
+  const navigatorSvg = container.querySelector(".profile-navigator svg");
+  let activePanDrag = null;
+
+  const pctFromNavigatorEvent = (event) => {
+    const rect = navigatorSvg?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return 0;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const plotRatio = Math.max(0, Math.min(1, (ratio * overviewWidth - overviewLeft) / overviewPlotWidth));
+    return plotRatio * 100;
+  };
+
+  navigatorSvg?.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    navigatorSvg.setPointerCapture(event.pointerId);
+    const currentStart = Number(container.dataset.windowStart || windowStartPct);
+    const currentEnd = Number(container.dataset.windowEnd || windowEndPct);
+    const span = currentEnd - currentStart;
+    const pointerPct = pctFromNavigatorEvent(event);
+    const offsetPct = pointerPct >= currentStart && pointerPct <= currentEnd
+      ? pointerPct - currentStart
+      : span / 2;
+
+    activePanDrag = { span, offsetPct };
+    pendingPanStart = Math.max(0, Math.min(100 - span, pointerPct - offsetPct));
+    updateWindow(pendingPanStart, pendingPanStart + span);
+  });
+
+  navigatorSvg?.addEventListener("pointermove", (event) => {
+    if (!activePanDrag) return;
+    const dragSpan = activePanDrag.span;
+    pendingPanStart = Math.max(
+      0,
+      Math.min(100 - dragSpan, pctFromNavigatorEvent(event) - activePanDrag.offsetPct)
+    );
+    if (panFrame) return;
+    panFrame = requestAnimationFrame(() => {
+      panFrame = 0;
+      updateWindow(pendingPanStart, pendingPanStart + dragSpan);
+    });
+  });
+
+  const endNavigatorDrag = (event) => {
+    if (!activePanDrag) return;
+    activePanDrag = null;
+    navigatorSvg.releasePointerCapture?.(event.pointerId);
+  };
+
+  navigatorSvg?.addEventListener("pointerup", endNavigatorDrag);
+  navigatorSvg?.addEventListener("pointercancel", endNavigatorDrag);
+
+  const zoomByWheel = (event) => {
+    event.preventDefault();
+    const target = event.currentTarget;
+    const rect = target.getBoundingClientRect();
+    const cursorRatio = rect.width > 0
+      ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+      : 0.5;
+    const currentStart = Number(container.dataset.windowStart || windowStartPct);
+    const currentEnd = Number(container.dataset.windowEnd || windowEndPct);
+    const span = currentEnd - currentStart;
+    const factor = event.deltaY < 0 ? 0.90 : 1.12;
+    const nextSpan = Math.max(minWindowPct, Math.min(100, span * factor));
+    const anchor = currentStart + span * cursorRatio;
+    const nextStart = Math.max(0, Math.min(100 - nextSpan, anchor - nextSpan * cursorRatio));
+    updateWindow(nextStart, nextStart + nextSpan);
+  };
+
+  container.querySelector(".profile-main-chart")?.addEventListener("wheel", zoomByWheel, { passive: false });
+  container.querySelector(".profile-navigator")?.addEventListener("wheel", zoomByWheel, { passive: false });
+}
+
+function renderM1StandardWeekChart(container, chartData) {
+  if (!chartData) {
+    resetInsightChart(container, "运行 M1 后展示标准周功率模拟。");
+    return;
+  }
+
+  renderSeriesProfileChart(
+    container,
+    {
+      load: chartData.ev || [],
+      pv: chartData.pv || [],
+      soc: chartData.soc || []
+    },
+    {
+      emptyText: "运行 M1 后展示标准周功率模拟。",
+      ticks: [
+        { label: "周一", ratio: 0 },
+        { label: "周二", ratio: 1 / 6 },
+        { label: "周三", ratio: 2 / 6 },
+        { label: "周四", ratio: 3 / 6 },
+        { label: "周五", ratio: 4 / 6 },
+        { label: "周六", ratio: 5 / 6 },
+        { label: "周日", ratio: 1 }
+      ],
+      timelineDays: 7,
+      defaultZoom: 1,
+      title: "标准周连续模拟",
+      subtitle: "缩小看一周全貌，放大查看日内波动"
+    }
+  );
+}
+
+function pickM2WorstDay(result) {
+  const ev = result?.chartData?.ev || [];
+  const soc = result?.chartData?.soc || [];
+  const queue = result?.chartData?.queue || [];
+  const limitKw = Number(result?.summary?.transformerLimitKw || 0);
+  const pointsPerDay = 96;
+  const days = Math.max(1, Math.floor(ev.length / pointsPerDay));
+  let worst = { day: 0, score: -Infinity };
+
+  for (let day = 0; day < days; day++) {
+    const start = day * pointsPerDay;
+    const dayLoad = ev.slice(start, start + pointsPerDay).map((v) => Number(v || 0));
+    const daySoc = soc.slice(start, start + pointsPerDay).map((v) => Number(v || 100));
+    const dayQueue = queue.slice(start, start + pointsPerDay).map((v) => Number(v || 0));
+    const overflowTicks = limitKw > 0 ? dayLoad.filter((v) => v > limitKw).length : 0;
+    const peak = Math.max(...dayLoad, 0);
+    const minSoc = Math.min(...daySoc, 100);
+    const queuePeak = Math.max(...dayQueue, 0);
+    const score =
+      overflowTicks * 8 +
+      Math.max(0, peak - limitKw) * 0.04 +
+      queuePeak * 1.5 +
+      Math.max(0, 8 - minSoc) * 5;
+
+    if (score > worst.score) {
+      worst = { day, score, overflowTicks, peak, minSoc, queuePeak };
+    }
+  }
+
+  return worst;
+}
+
+function renderM2MonthChart(container, result) {
+  const chartData = result?.chartData;
+  const ev = chartData?.ev || [];
+  if (!chartData || !Array.isArray(ev) || ev.length === 0) {
+    resetInsightChart(container, "运行 M2 后展示压力月连续功率曲线。");
+    return;
+  }
+
+  const pointsPerDay = 96;
+  const worst = pickM2WorstDay(result);
+  const days = Math.max(1, Math.floor(ev.length / pointsPerDay));
+
+  renderSeriesProfileChart(
+    container,
+    {
+      load: chartData.ev,
+      pv: chartData.pv,
+      grid: chartData.grid,
+      soc: chartData.soc
+    },
+    {
+      limitKw: result.summary?.transformerLimitKw,
+      emptyText: "运行 M2 后展示压力月连续功率曲线。",
+      timelineDays: days,
+      defaultZoom: 1,
+      title: `压力月连续曲线（${days} 天）`,
+      subtitle: `可缩放查看日内细节；最高风险日：第 ${worst.day + 1} 天`
+    }
+  );
+
+  container.insertAdjacentHTML("afterbegin", `
+    <div class="worst-day-note">
+      <strong>最高风险日：第 ${worst.day + 1} 天</strong>
+      <span>峰值 ${formatNumber(worst.peak, 1)} kW · 越限 ${worst.overflowTicks || 0} tick · 排队峰值 ${formatNumber(worst.queuePeak || 0, 0)} · 最低 SOC ${formatNumber(worst.minSoc, 1)}%</span>
+    </div>
+  `);
+}
+
+function renderCapexStackChart(container, economics) {
+  if (!container || !economics) {
+    resetInsightChart(container, "运行 M1 后展示投资构成。");
+    return;
+  }
+
+  const items = [
+    { label: "光伏", value: Number(economics.pvCapexWan || 0), className: "pv" },
+    { label: "储能容量", value: Number(economics.storageEnergyCapexWan || 0), className: "storage" },
+    { label: "PCS", value: Number(economics.storagePowerCapexWan || 0), className: "pcs" },
+    { label: "充电桩", value: Number(economics.chargerCapexWan || 0), className: "charger" },
+    { label: "EMS", value: Number(economics.emsCapexWan || 0), className: "ems" }
+  ].filter((item) => item.value > 0);
+
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+
+  if (total <= 0) {
+    resetInsightChart(container, "暂无投资构成数据。");
+    return;
+  }
+
+  const segments = items.map((item) => {
+    const pct = (item.value / total) * 100;
+    return `<span class="stack-segment ${item.className}" style="width:${pct}%"><em>${pct >= 12 ? `${formatNumber(pct, 0)}%` : ""}</em></span>`;
+  }).join("");
+
+  const rows = items.map((item) => {
+    const pct = (item.value / total) * 100;
+    return `
+      <div class="stack-row">
+        <span><i class="stack-dot ${item.className}"></i>${item.label}</span>
+        <strong>${formatNumber(item.value, 1)} 万</strong>
+        <em>${formatNumber(pct, 1)}%</em>
+      </div>
+    `;
+  }).join("");
+
+  container.innerHTML = `
+    <div class="stack-total">
+      <span>总投资</span>
+      <strong>${formatNumber(economics.capexWan || total, 1)} 万元</strong>
+    </div>
+    <div class="stack-bar">${segments}</div>
+    <div class="stack-rows">${rows}</div>
+  `;
+}
+
+function renderM2RiskHeatmap(container, result) {
+  const chartData = result?.chartData;
+  const ev = chartData?.ev || [];
+  const soc = chartData?.soc || [];
+  const queue = chartData?.queue || [];
+  const limitKw = Number(result?.summary?.transformerLimitKw || 0);
+
+  if (!container || !Array.isArray(ev) || ev.length === 0) {
+    resetInsightChart(container, "运行 M2 后展示日风险分布。");
+    return;
+  }
+
+  const pointsPerDay = 96;
+  const days = Math.max(1, Math.floor(ev.length / pointsPerDay));
+  const cells = [];
+
+  for (let day = 0; day < days; day++) {
+    const start = day * pointsPerDay;
+    const dayLoad = ev.slice(start, start + pointsPerDay).map((v) => Number(v || 0));
+    const daySoc = soc.slice(start, start + pointsPerDay).map((v) => Number(v || 100));
+    const dayQueue = queue.slice(start, start + pointsPerDay).map((v) => Number(v || 0));
+    const overflowTicks = limitKw > 0 ? dayLoad.filter((v) => v > limitKw).length : 0;
+    const peak = Math.max(...dayLoad, 0);
+    const minSoc = Math.min(...daySoc, 100);
+    const queuePeak = Math.max(...dayQueue, 0);
+    const riskScore = Math.min(3, (overflowTicks > 0 ? 1 : 0) + (overflowTicks > 8 ? 1 : 0) + (minSoc < 8 ? 1 : 0) + (queuePeak > 0 ? 1 : 0));
+    const className = riskScore === 0 ? "safe" : riskScore === 1 ? "warn" : riskScore === 2 ? "high" : "critical";
+
+    cells.push(`
+      <span class="risk-cell ${className}">
+        <strong>${day + 1}</strong>
+        <em>峰值 ${formatNumber(peak, 0)} kW / 越限 ${overflowTicks} tick / 排队峰值 ${formatNumber(queuePeak, 0)} / SOC ${formatNumber(minSoc, 1)}%</em>
+      </span>
+    `);
+  }
+
+  container.innerHTML = `
+    <div class="risk-heatmap-grid">${cells.join("")}</div>
+    <div class="risk-legend">
+      <span><i class="risk-dot safe"></i>安全</span>
+      <span><i class="risk-dot warn"></i>轻微风险</span>
+      <span><i class="risk-dot high"></i>高风险</span>
+      <span><i class="risk-dot critical"></i>严重风险</span>
+    </div>
+  `;
+}
+
 function renderAnnualBarChart(container, values, options = {}) {
   if (!container) return;
 
@@ -265,6 +857,8 @@ function renderM1Summary(state) {
   if (!result) {
     el.title.textContent = "尚未运行真实规划。";
     el.meta.textContent = "运行后，这里会显示城市、气候区与新能源目标。";
+    resetInsightChart(el.capexChart, "运行 M1 后展示投资构成。");
+    resetInsightChart(el.powerChart, "运行 M1 后展示典型日功率曲线。");
     return;
   }
 
@@ -285,6 +879,9 @@ function renderM1Summary(state) {
   el.avgNeed.textContent = `${formatNumber(demandProfile.averageSessionNeedKwh, 1)} kWh`;
   el.curtailment.textContent = `${formatNumber(energyPerformance.curtailmentRatePct, 1)}%`;
   el.gridAnnual.textContent = `${formatNumber(energyPerformance.gridBuyAnnualKwh, 1)} kWh`;
+
+  renderCapexStackChart(el.capexChart, economics);
+  renderM1StandardWeekChart(el.powerChart, result.chartData);
 }
 
 function renderM2Summary(state) {
@@ -309,6 +906,8 @@ function renderM2Summary(state) {
     el.meta.textContent = state.input.m2.gTiltData
       ? "气象数据已就绪，可以运行真实月压力测试。"
       : "上传气象 CSV 后，运行真实月压力测试。";
+    resetInsightChart(el.powerChart, "运行 M2 后展示压力月功率画像。");
+    resetInsightChart(el.riskHeatmap, "运行 M2 后展示日风险分布。");
     return;
   }
 
@@ -328,6 +927,148 @@ function renderM2Summary(state) {
   el.riskService.textContent = handoffToM3.hasServiceRisk ? "有" : "无";
   el.riskStorage.textContent = handoffToM3.hasStorageRisk ? "有" : "无";
   el.fixedP99.textContent = String(occupancyReference.fixedReadyP99);
+
+  renderM2MonthChart(el.powerChart, result);
+  renderM2RiskHeatmap(el.riskHeatmap, result);
+}
+
+function getImprovementText(base, next, mode = "lower") {
+  if (!Number.isFinite(base) || !Number.isFinite(next)) return "--";
+
+  const delta = next - base;
+
+  if (mode === "higher") {
+    if (Math.abs(delta) < 0.01) return "持平";
+    return delta > 0
+      ? `提升 ${formatNumber(delta, 1)} pct`
+      : `下降 ${formatNumber(Math.abs(delta), 1)} pct`;
+  }
+
+  if (Math.abs(delta) < 0.01) return "持平";
+
+  if (base > 0) {
+    const rate = ((base - next) / base) * 100;
+    return rate >= 0
+      ? `改善 ${formatNumber(rate, 1)}%`
+      : `增加 ${formatNumber(Math.abs(rate), 1)}%`;
+  }
+
+  return next <= base ? "无新增风险" : `新增 ${formatNumber(next - base, 1)}`;
+}
+
+function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
+  if (!container || !baseline || !traditional?.result || !flexible?.result) {
+    resetInsightChart(container, "运行 M3 后展示两条路线各自相对基准的改善效果。");
+    return;
+  }
+
+  const metrics = [
+    {
+      label: "总缺口",
+      unit: "kWh",
+      baseline: Number(baseline.unmetTotalKwh || 0),
+      traditional: Number(traditional.result.unmetTotalKwh || 0),
+      flexible: Number(flexible.result.unmetTotalKwh || 0),
+      mode: "lower"
+    },
+    {
+      label: "排队缺口",
+      unit: "kWh",
+      baseline: Number(baseline.queueUnmetKwh || 0),
+      traditional: Number(traditional.result.queueUnmetKwh || 0),
+      flexible: Number(flexible.result.queueUnmetKwh || 0),
+      mode: "lower"
+    },
+    {
+      label: "峰值功率",
+      unit: "kW",
+      baseline: Number(baseline.realPeakKw || 0),
+      traditional: Number(traditional.result.realPeakKw || 0),
+      flexible: Number(flexible.result.realPeakKw || 0),
+      mode: "lower"
+    },
+    {
+      label: "越限次数",
+      unit: "次",
+      baseline: Number(baseline.overflowCount || 0),
+      traditional: Number(traditional.result.overflowCount || 0),
+      flexible: Number(flexible.result.overflowCount || 0),
+      mode: "lower"
+    },
+    {
+      label: "最低 SOC",
+      unit: "%",
+      baseline: Number(baseline.socMinPct || 0),
+      traditional: Number(traditional.result.socMinPct || 0),
+      flexible: Number(flexible.result.socMinPct || 0),
+      mode: "higher"
+    }
+  ];
+
+  const routeCards = [
+    {
+      key: "traditional",
+      title: "路线 A：传统桩站",
+      badge: traditional.handoffToM4?.needsHardwareReinforcement ? "仍需 M4 加固" : "可直接承接",
+      values: metrics.map((metric) => ({ ...metric, routeValue: metric.traditional }))
+    },
+    {
+      key: "flexible",
+      title: "路线 B：柔性调度",
+      badge: flexible.handoffToM4?.needsHardwareReinforcement ? "仍需 M4 加固" : "可直接承接",
+      values: metrics.map((metric) => ({ ...metric, routeValue: metric.flexible }))
+    }
+  ];
+
+  container.innerHTML = routeCards.map((route) => {
+    const rows = route.values.map((metric) => {
+      const maxValue = Math.max(metric.baseline, metric.routeValue, 1);
+      const baselineWidth = Math.max(5, (metric.baseline / maxValue) * 100);
+      const routeWidth = Math.max(5, (metric.routeValue / maxValue) * 100);
+      const improvement = getImprovementText(metric.baseline, metric.routeValue, metric.mode);
+      const isBetter = metric.mode === "higher"
+        ? metric.routeValue > metric.baseline
+        : metric.routeValue < metric.baseline;
+      const isWorse = metric.mode === "higher"
+        ? metric.routeValue < metric.baseline
+        : metric.routeValue > metric.baseline;
+
+      return `
+        <section class="baseline-lift-row ${isBetter ? "better" : ""} ${isWorse ? "worse" : ""}">
+          <div class="baseline-lift-row-head">
+            <strong>${metric.label}</strong>
+            <em>${improvement}</em>
+          </div>
+
+          <div class="baseline-lift-bar-line">
+            <span>基准</span>
+            <div class="baseline-lift-track">
+              <div class="baseline-lift-fill base" style="width:${baselineWidth}%"></div>
+            </div>
+            <strong>${formatNumber(metric.baseline, 1)} ${metric.unit}</strong>
+          </div>
+
+          <div class="baseline-lift-bar-line">
+            <span>路线后</span>
+            <div class="baseline-lift-track">
+              <div class="baseline-lift-fill ${route.key}" style="width:${routeWidth}%"></div>
+            </div>
+            <strong>${formatNumber(metric.routeValue, 1)} ${metric.unit}</strong>
+          </div>
+        </section>
+      `;
+    }).join("");
+
+    return `
+      <section class="baseline-lift-route ${route.key}">
+        <div class="baseline-lift-route-head">
+          <h5>${route.title}</h5>
+          <span>${route.badge}</span>
+        </div>
+        ${rows}
+      </section>
+    `;
+  }).join("");
 }
 
 function renderM3Summary(state) {
@@ -392,12 +1133,21 @@ function renderM3Summary(state) {
     el.selectedOverflow.textContent = "-- 次";
     el.tradCard?.classList.remove("selected");
     el.flexCard?.classList.remove("selected");
+    resetInsightChart(el.routeCompareChart, "运行 M3 后展示两条路线各自相对基准的改善效果。");
     resetAnnualSummary();
     return;
   }
 
   const traditional = result.routeOptions.traditional_pile;
   const flexible = result.routeOptions.flex_matrix;
+
+  renderM3BaselineLiftChart(
+    el.routeCompareChart,
+    m2?.riskReport,
+    traditional,
+    flexible
+  );
+
   const selectedRoute = selectedRouteKey ? result.routeOptions[selectedRouteKey] : null;
 
   el.title.textContent = result.summary.title;
@@ -726,6 +1476,204 @@ function renderM4ScenarioDeltaCards(el, scenario, routeKey) {
         })();
 }
 
+function renderM4InvestmentEffectChart(container, scenarios, recommendation) {
+  if (!container || !Array.isArray(scenarios) || scenarios.length === 0) {
+    resetInsightChart(container, "运行 M4 后展示方案投资与改善关系。");
+    return;
+  }
+
+  const points = scenarios.map((scenario) => {
+    const primaryRate = Number(
+      scenario.familyEffectiveness?.primaryReductionRate ??
+      scenario.improvementVsBaseline?.annual?.unmetReductionRate ??
+      0
+    );
+
+    return {
+      id: scenario.id,
+      capex: Number(scenario.extraCapexWan || 0),
+      effect: Math.max(0, Math.min(1, primaryRate || 0)),
+      score: Number(scenario.recommendation?.totalScore || 0),
+      isMain: scenario.id === recommendation?.recommendedScenarioId,
+      isLow: scenario.id === recommendation?.lowInvestmentScenarioId,
+      isSafe: scenario.id === recommendation?.highProtectionScenarioId
+    };
+  });
+
+  const width = 640;
+  const height = 320;
+  const left = 64;
+  const right = 24;
+  const top = 28;
+  const bottom = 54;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+
+  const maxCapex = Math.max(...points.map((p) => p.capex), 1);
+
+  const pointSvg = points.map((point) => {
+    const x = left + (point.capex / maxCapex) * plotWidth;
+    const y = top + plotHeight - point.effect * plotHeight;
+
+    const classes = [
+      "scatter-point",
+      point.isMain ? "main" : "",
+      point.isLow ? "low" : "",
+      point.isSafe ? "safe" : ""
+    ].filter(Boolean).join(" ");
+
+    const showLabel =
+      point.id === "S0" ||
+      point.isMain ||
+      point.isLow ||
+      point.isSafe;
+
+    return `
+      <g class="${classes}">
+        <circle cx="${x}" cy="${y}" r="${point.isMain ? 8 : 6}">
+          <title>
+            ${point.id}｜追加投资 ${formatNumber(point.capex, 2)} 万｜主导改善率 ${formatNumber(point.effect * 100, 1)}%｜评分 ${formatNumber(point.score, 1)}
+          </title>
+        </circle>
+        ${showLabel ? `<text x="${x + 10}" y="${y - 10}">${point.id}</text>` : ""}
+      </g>
+    `;
+  }).join("");
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="M4 投资与风险改善关系图">
+      <line class="scatter-axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + plotHeight}" />
+      <line class="scatter-axis" x1="${left}" y1="${top + plotHeight}" x2="${left + plotWidth}" y2="${top + plotHeight}" />
+
+      <line class="scatter-grid" x1="${left}" y1="${top}" x2="${left + plotWidth}" y2="${top}" />
+      <line class="scatter-grid" x1="${left}" y1="${top + plotHeight / 2}" x2="${left + plotWidth}" y2="${top + plotHeight / 2}" />
+
+      <text class="scatter-axis-label" x="10" y="${top + 4}">100%</text>
+      <text class="scatter-axis-label" x="18" y="${top + plotHeight / 2 + 4}">50%</text>
+      <text class="scatter-axis-label" x="26" y="${top + plotHeight + 4}">0%</text>
+
+      <text class="scatter-axis-label" x="${left}" y="${height - 18}">0</text>
+      <text class="scatter-axis-label" x="${left + plotWidth / 2 - 12}" y="${height - 18}">
+        ${formatNumber(maxCapex / 2, 1)}
+      </text>
+      <text class="scatter-axis-label" x="${left + plotWidth - 28}" y="${height - 18}">
+        ${formatNumber(maxCapex, 1)}
+      </text>
+
+      <text class="scatter-axis-title" x="${left + plotWidth / 2 - 54}" y="${height - 2}">
+        追加投资（万元）
+      </text>
+      <text class="scatter-axis-title vertical" x="18" y="${top + plotHeight / 2 + 28}">
+        主导风险改善率
+      </text>
+
+      ${pointSvg}
+    </svg>
+
+    <div class="scatter-legend">
+      <span><i class="legend-dot main"></i>主推荐</span>
+      <span><i class="legend-dot low"></i>低投资备选</span>
+      <span><i class="legend-dot safe"></i>高保障备选</span>
+    </div>
+  `;
+}
+
+function renderM4BaselineCompareChart(container, scenarios, recommendation) {
+  if (!container || !Array.isArray(scenarios) || scenarios.length === 0) {
+    resetInsightChart(container, "运行 M4 后展示主推荐方案相对基准的改进。");
+    return;
+  }
+
+  const baseline = scenarios.find((scenario) => scenario.id === "S0");
+  const recommended = scenarios.find(
+    (scenario) => scenario.id === recommendation?.recommendedScenarioId
+  );
+
+  if (!baseline || !recommended) {
+    resetInsightChart(container, "缺少 S0 或主推荐方案，暂无法生成对比图。");
+    return;
+  }
+
+  const rows = [
+    {
+      label: "全年总缺口",
+      unit: "kWh",
+      base: Number(baseline.annualValidation?.totalUnmetKwh || 0),
+      rec: Number(recommended.annualValidation?.totalUnmetKwh || 0),
+      better: "lower"
+    },
+    {
+      label: "全年服务率",
+      unit: "%",
+      base: Number(baseline.annualValidation?.serviceRate || 0) * 100,
+      rec: Number(recommended.annualValidation?.serviceRate || 0) * 100,
+      better: "higher"
+    },
+    {
+      label: "SOC 风险月份",
+      unit: "月",
+      base: Number(baseline.annualValidation?.monthsWithSocRisk || 0),
+      rec: Number(recommended.annualValidation?.monthsWithSocRisk || 0),
+      better: "lower"
+    },
+    {
+      label: "全年越限次数",
+      unit: "次",
+      base: Number(baseline.annualValidation?.totalOverflowCount || 0),
+      rec: Number(recommended.annualValidation?.totalOverflowCount || 0),
+      better: "lower"
+    }
+  ];
+
+  container.innerHTML = rows.map((row) => {
+    const maxValue = Math.max(row.base, row.rec, 1);
+    const baseWidth = Math.max(6, (row.base / maxValue) * 100);
+    const recWidth = Math.max(6, (row.rec / maxValue) * 100);
+
+    let deltaText = "持平";
+
+    if (row.better === "lower") {
+      if (row.base > 0) {
+        const improveRate = ((row.base - row.rec) / row.base) * 100;
+        if (improveRate > 0) {
+          deltaText = `改善 ${formatNumber(improveRate, 1)}%`;
+        } else if (improveRate < 0) {
+          deltaText = `恶化 ${formatNumber(Math.abs(improveRate), 1)}%`;
+        }
+      }
+    } else {
+      const gain = row.rec - row.base;
+      if (gain > 0) deltaText = `提升 ${formatNumber(gain, 1)} pct`;
+      if (gain < 0) deltaText = `下降 ${formatNumber(Math.abs(gain), 1)} pct`;
+    }
+
+    return `
+      <section class="baseline-compare-row">
+        <div class="baseline-compare-head">
+          <strong>${row.label}</strong>
+          <em>${deltaText}</em>
+        </div>
+
+        <div class="baseline-bar-line">
+          <span>S0</span>
+          <div class="baseline-track">
+            <div class="baseline-fill base" style="width:${baseWidth}%"></div>
+          </div>
+          <strong>${formatNumber(row.base, 1)} ${row.unit}</strong>
+        </div>
+
+        <div class="baseline-bar-line">
+          <span>${recommended.id}</span>
+          <div class="baseline-track">
+            <div class="baseline-fill rec" style="width:${recWidth}%"></div>
+          </div>
+          <strong>${formatNumber(row.rec, 1)} ${row.unit}</strong>
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
 function renderM4Summary(state) {
   const result = state.stages.m4.result;
   const m3 = state.stages.m3.result;
@@ -773,6 +1721,8 @@ function renderM4Summary(state) {
     }
 
     renderM4ScenarioDeltaCards(el, null, selectedRouteKey);
+    resetInsightChart(el.investmentEffectChart, "运行 M4 后展示方案投资与改善关系。");
+    resetInsightChart(el.baselineCompareChart, "运行 M4 后展示主推荐方案相对基准的改进。");
 
     return;
   }
@@ -796,6 +1746,18 @@ function renderM4Summary(state) {
     ? `${formatNumber(recommended.recommendation.totalScore, 1)} 分`
     : "--";
   el.recommendExplain.textContent = recommendation.explanation || "暂无推荐解释。";
+
+  renderM4InvestmentEffectChart(
+    el.investmentEffectChart,
+    scenarios,
+    recommendation
+  );
+
+  renderM4BaselineCompareChart(
+    el.baselineCompareChart,
+    scenarios,
+    recommendation
+  );
 
   el.scenarioTableBody.innerHTML = scenarios.map((scenario) => {
     const score = scenario.recommendation?.totalScore != null
@@ -872,6 +1834,68 @@ function renderM4Summary(state) {
   );
 }
 
+function renderReportBoard(state) {
+  const el = dom.report;
+  if (!el?.headline) return;
+
+  const m1 = state.stages.m1.result;
+  const m2 = state.stages.m2.result;
+  const m3 = state.stages.m3.result;
+  const m4 = state.stages.m4.result;
+  const selectedAnnual = m3?.selectedAnnualValidation?.annualValidation || null;
+  const recommendation = m4?.recommendation || null;
+  const scenarios = m4?.scenarios || [];
+  const recommended = scenarios.find((s) => s.id === recommendation?.recommendedScenarioId) || null;
+  const annual = recommended?.annualValidation || selectedAnnual;
+
+  if (m4 && recommendation) {
+    el.headline.textContent = recommendation.isFallbackRecommendation
+      ? "已有相对最优加固方案，仍需关注残余风险"
+      : "已形成最终推荐方案，可进入汇报定稿";
+    el.subtitle.textContent = recommendation.explanation || "推荐方案已结合投资、风险消除和年度运行表现综合排序。";
+    el.action.textContent = recommendation.recommendedScenarioId || "--";
+    el.actionNote.textContent = recommendation.isFallbackRecommendation ? "相对最优方案" : "主推荐方案";
+  } else if (selectedAnnual) {
+    el.headline.textContent = "年度验证已完成，建议进入 M4 加固定型";
+    el.subtitle.textContent = `${getAnnualJudgement(selectedAnnual)}，主要关注：${getAnnualMainRisk(selectedAnnual)}。`;
+    el.action.textContent = "运行 M4";
+    el.actionNote.textContent = getM4FocusText(selectedAnnual);
+  } else if (m3?.routeOptions) {
+    el.headline.textContent = "调度路线已生成，先选择路线再做年度验证";
+    el.subtitle.textContent = "对比传统桩站与柔性调度后，选择更适合汇报口径的技术路线。";
+    el.action.textContent = "选择 M3 路线";
+    el.actionNote.textContent = "形成 M4 输入";
+  } else if (m2?.riskReport) {
+    el.headline.textContent = "压力风险已暴露，下一步评估调度消纳能力";
+    el.subtitle.textContent = `压力月峰值 ${formatNumber(m2.riskReport.realPeakKw, 1)} kW，缺口 ${formatNumber(m2.riskReport.unmetTotalKwh, 1)} kWh。`;
+    el.action.textContent = "运行 M3";
+    el.actionNote.textContent = "比较调度路线";
+  } else if (m1?.hardwarePlan) {
+    el.headline.textContent = "基准建设规模已生成";
+    el.subtitle.textContent = `${m1.summary.city} 基准方案：PV ${formatNumber(m1.hardwarePlan.pvKw, 1)} kW，储能 ${formatNumber(m1.hardwarePlan.storageKwh, 1)} kWh。`;
+    el.action.textContent = "运行 M2";
+    el.actionNote.textContent = "验证真实月风险";
+  } else {
+    el.headline.textContent = "等待 M1 规划结果";
+    el.subtitle.textContent = "完成各阶段计算后，这里会自动汇总建设规模、年度风险和推荐方案。";
+    el.action.textContent = "先运行 M1";
+    el.actionNote.textContent = "建立基准配置";
+  }
+
+  const capexWan =
+    recommended?.extraCapexWan != null && m1?.economics?.capexWan != null
+      ? m1.economics.capexWan + recommended.extraCapexWan
+      : m1?.economics?.capexWan;
+
+  el.capex.textContent = Number.isFinite(capexWan) ? formatNumber(capexWan, 1) : "--";
+  el.service.textContent = Number.isFinite(annual?.serviceRate)
+    ? `${formatPercent(annual.serviceRate, 1)}%`
+    : "--";
+  el.riskMonths.textContent = annual
+    ? `${annual.monthsWithSocRisk || 0} / ${annual.monthsWithOverflow || 0}`
+    : "--";
+}
+
 export function renderApp(state) {
   const activeMeta = STAGES[state.activeStage];
   dom.stageTitle.textContent = activeMeta.title;
@@ -884,6 +1908,7 @@ export function renderApp(state) {
   renderPanels(state);
   renderButtons(state);
   renderRawResults(state);
+  renderReportBoard(state);
   renderM1Summary(state);
   renderM2Summary(state);
   renderM3Summary(state);

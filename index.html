@@ -12,8 +12,8 @@
       <div class="brand">
         <div class="brand-badge">MGS</div>
         <div>
-          <h1>光储充决策平台 V2</h1>
-          <p>架构重写 · 保留原始业务主线</p>
+          <h1>光储充决策平台</h1>
+          <p>汇报驾驶舱 · 全年连续仿真</p>
         </div>
       </div>
 
@@ -49,8 +49,8 @@
       </nav>
 
       <section class="sidebar-note">
-        <h2>V2-0 目标</h2>
-        <p>先把软件骨架搭稳：状态中心、阶段门禁、Worker 协议、页面渲染分层。</p>
+        <h2>汇报口径</h2>
+        <p>先给结论，再看证据：建设规模、压力风险、调度路线、最终加固方案依次展开。</p>
       </section>
     </aside>
 
@@ -65,9 +65,9 @@
 
       <section class="hero-card">
         <div>
-          <span class="eyebrow">软件主线</span>
-          <h3>输入画像 → M1 → M2 → M3 → M4 → 决策报告</h3>
-          <p>V2-4.5 已升级全年无断点连续仿真内核：365 天单次仿真、储能与车队 SOC 跨月继承、月度统计从全年切片汇总。</p>
+          <span class="eyebrow">Executive View</span>
+          <h3>从园区画像到最终加固方案，一屏讲清决策依据</h3>
+          <p>围绕“建多少、风险在哪、怎么调度、是否还要加固”组织信息，适合在汇报中按阶段递进展示。</p>
         </div>
         <div class="hero-grid">
           <div class="mini-card">
@@ -81,6 +81,36 @@
           <div class="mini-card">
             <span>阶段解锁</span>
             <strong id="summary-unlock">仅 M1</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-board" aria-label="汇报总览">
+        <article class="report-headline">
+          <span class="eyebrow">决策结论</span>
+          <h3 id="report-headline">等待 M1 规划结果</h3>
+          <p id="report-subtitle">完成各阶段计算后，这里会自动汇总建设规模、年度风险和推荐方案。</p>
+        </article>
+        <div class="report-kpis">
+          <div class="report-kpi">
+            <span>推荐动作</span>
+            <strong id="report-action">先运行 M1</strong>
+            <small id="report-action-note">建立基准配置</small>
+          </div>
+          <div class="report-kpi">
+            <span>建设投资</span>
+            <strong id="report-capex">--</strong>
+            <small>万元</small>
+          </div>
+          <div class="report-kpi">
+            <span>服务可靠性</span>
+            <strong id="report-service">--</strong>
+            <small>年度服务率</small>
+          </div>
+          <div class="report-kpi">
+            <span>风险月份</span>
+            <strong id="report-risk-months">--</strong>
+            <small>SOC / 越限</small>
           </div>
         </div>
       </section>
@@ -213,6 +243,32 @@
         <div class="metric-card"><span>LCOE</span><strong id="m1-lcoe">--</strong><small>元/kWh</small></div>
       </div>
 
+      <section class="insight-grid m1-insight-grid">
+        <article class="info-card insight-card">
+          <div class="chart-card-head">
+            <div>
+              <h4>投资构成</h4>
+              <p class="helper-copy">拆分光伏、储能、充电桩与 EMS 投资，说明基准方案的钱花在哪。</p>
+            </div>
+          </div>
+          <div class="stack-chart" id="m1-capex-chart">
+            <div class="insight-chart-empty">运行 M1 后展示投资构成。</div>
+          </div>
+        </article>
+
+        <article class="info-card insight-card">
+          <div class="chart-card-head">
+            <div>
+              <h4>标准周功率模拟</h4>
+              <p class="helper-copy">展示 7 天标准周内充电负荷、光伏出力与储能 SOC 的连续变化。</p>
+            </div>
+          </div>
+          <div class="power-profile-chart" id="m1-power-chart">
+            <div class="insight-chart-empty">运行 M1 后展示标准周功率模拟。</div>
+          </div>
+        </article>
+      </section>
+
       <article class="info-card m1-diagnosis-card">
         <h4>需求与约束摘要</h4>
         <div class="diagnosis-grid">
@@ -319,6 +375,32 @@
         <div class="metric-card"><span>弃光率</span><strong id="m2-curtailment">--</strong><small>%</small></div>
       </div>
 
+      <section class="insight-grid m2-insight-grid">
+        <article class="info-card insight-card">
+          <div class="chart-card-head">
+            <div>
+              <h4>压力月连续功率曲线</h4>
+              <p class="helper-copy">展示整个月的负荷、光伏、购电功率与储能 SOC，可缩放并横向滚动查看日内细节。</p>
+            </div>
+          </div>
+          <div class="power-profile-chart" id="m2-power-chart">
+            <div class="insight-chart-empty">运行 M2 后展示压力月连续功率曲线。</div>
+          </div>
+        </article>
+
+        <article class="info-card insight-card">
+          <div class="chart-card-head">
+            <div>
+              <h4>压力月逐日风险总览</h4>
+              <p class="helper-copy">按天展示峰值、越限 tick、排队峰值与最低 SOC，定位风险集中在哪些日期。</p>
+            </div>
+          </div>
+          <div class="risk-heatmap" id="m2-risk-heatmap">
+            <div class="insight-chart-empty">运行 M2 后展示压力月逐日风险。</div>
+          </div>
+        </article>
+      </section>
+
       <article class="info-card m1-diagnosis-card">
         <h4>交给 M3 的风险摘要</h4>
         <div class="diagnosis-grid">
@@ -400,6 +482,21 @@
       <button class="secondary-btn route-select-btn" data-m3-route="flex_matrix" id="select-m3-flex" disabled>选择柔性调度路线并验证全年表现</button>
     </article>
   </section>
+
+  <article class="info-card m3-baseline-lift-card">
+    <div class="chart-card-head">
+      <div>
+        <h4>两条路线相对基准的改善效果</h4>
+        <p class="helper-copy">
+          以 M1 基准方案在 M2 压力月中的风险暴露为参照，分别展示传统桩站路线和柔性调度路线能消除多少风险。
+        </p>
+      </div>
+    </div>
+
+    <div class="baseline-lift-chart" id="m3-route-compare-chart">
+      <div class="insight-chart-empty">运行 M3 后展示两条路线各自相对基准的改善效果。</div>
+    </div>
+  </article>
 
   <article class="info-card selected-handoff-card">
     <h4>当前已选择路线</h4>
@@ -584,6 +681,38 @@
         <div><span>高保障备选</span><strong id="m4-recommend-safe">--</strong></div>
       </div>
       <p class="helper-copy" id="m4-recommend-explain">运行后，这里会解释为什么推荐该方案。</p>
+    </article>
+  </section>
+
+  <section class="m4-insight-grid">
+    <article class="info-card m4-investment-effect-card">
+      <div class="chart-card-head">
+        <div>
+          <h4>方案投资 — 主导风险改善关系</h4>
+          <p class="helper-copy">
+            横轴表示追加投资，纵轴表示该方案对其主导风险指标的改善幅度。主推荐、低投资备选与高保障备选会被重点标记。
+          </p>
+        </div>
+      </div>
+
+      <div class="m4-scatter-chart" id="m4-investment-effect-chart">
+        <div class="insight-chart-empty">运行 M4 后展示方案投资与改善关系。</div>
+      </div>
+    </article>
+
+    <article class="info-card m4-baseline-compare-card">
+      <div class="chart-card-head">
+        <div>
+          <h4>S0 基准 vs 当前主推荐</h4>
+          <p class="helper-copy">
+            对比主推荐方案相对基准方案在全年缺口、服务率、越限和 SOC 风险方面的变化。
+          </p>
+        </div>
+      </div>
+
+      <div class="m4-baseline-compare-chart" id="m4-baseline-compare-chart">
+        <div class="insight-chart-empty">运行 M4 后展示主推荐方案相对基准的改进。</div>
+      </div>
     </article>
   </section>
 

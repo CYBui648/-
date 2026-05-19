@@ -6,6 +6,15 @@ export const dom = {
   summaryState: document.getElementById("summary-state"),
   summaryWorker: document.getElementById("summary-worker"),
   summaryUnlock: document.getElementById("summary-unlock"),
+  report: {
+    headline: document.getElementById("report-headline"),
+    subtitle: document.getElementById("report-subtitle"),
+    action: document.getElementById("report-action"),
+    actionNote: document.getElementById("report-action-note"),
+    capex: document.getElementById("report-capex"),
+    service: document.getElementById("report-service"),
+    riskMonths: document.getElementById("report-risk-months")
+  },
   buttons: {
     m1: document.getElementById("run-m1"),
     m2: document.getElementById("run-m2"),
@@ -38,7 +47,9 @@ export const dom = {
     peak: document.getElementById("m1-peak"),
     avgNeed: document.getElementById("m1-avg-need"),
     curtailment: document.getElementById("m1-curtailment"),
-    gridAnnual: document.getElementById("m1-grid-annual")
+    gridAnnual: document.getElementById("m1-grid-annual"),
+    capexChart: document.getElementById("m1-capex-chart"),
+    powerChart: document.getElementById("m1-power-chart")
   },
   m2Summary: {
     title: document.getElementById("m2-summary-title"),
@@ -58,7 +69,9 @@ export const dom = {
     riskPeak: document.getElementById("m2-risk-peak"),
     riskService: document.getElementById("m2-risk-service"),
     riskStorage: document.getElementById("m2-risk-storage"),
-    fixedP99: document.getElementById("m2-fixed-p99")
+    fixedP99: document.getElementById("m2-fixed-p99"),
+    powerChart: document.getElementById("m2-power-chart"),
+    riskHeatmap: document.getElementById("m2-risk-heatmap")
   },
 m3Summary: {
   title: document.getElementById("m3-summary-title"),
@@ -79,6 +92,7 @@ m3Summary: {
   flexUnmet: document.getElementById("m3-flex-unmet"),
   flexNMatrix: document.getElementById("m3-flex-nmatrix"),
   flexStatus: document.getElementById("m3-flex-status"),
+  routeCompareChart: document.getElementById("m3-route-compare-chart"),
   selectedRoute: document.getElementById("m3-selected-route"),
   selectedNeed: document.getElementById("m3-selected-need"),
   selectedUnmet: document.getElementById("m3-selected-unmet"),
@@ -121,6 +135,8 @@ m3Summary: {
   recommendSafe: document.getElementById("m4-recommend-safe"),
   recommendScore: document.getElementById("m4-recommend-score"),
   recommendExplain: document.getElementById("m4-recommend-explain"),
+  investmentEffectChart: document.getElementById("m4-investment-effect-chart"),
+  baselineCompareChart: document.getElementById("m4-baseline-compare-chart"),
   scenarioTableBody: document.getElementById("m4-scenario-table-body"),
   scenarioSelect: document.getElementById("m4-scenario-select"),
   deltaPv: document.getElementById("m4-delta-pv"),

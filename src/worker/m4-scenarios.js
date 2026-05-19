@@ -50,6 +50,31 @@ function buildAdaptiveTransformerCandidates(transformerGapKw) {
   return candidates;
 }
 
+function buildAdaptivePMatrixCandidates(matrixPowerGapKw) {
+  const diagnosedGap = safeNumber(matrixPowerGapKw, 0);
+  const anchorGapKw = diagnosedGap > 0 ? diagnosedGap : 50;
+
+  const stepKw =
+    anchorGapKw <= 40
+      ? 5
+      : anchorGapKw <= 120
+        ? 10
+        : 25;
+
+  const rawCandidates = [0.5, 1.0, 1.5].map((factor) =>
+    ceilToStep(anchorGapKw * factor, stepKw)
+  );
+
+  const candidates = uniqueSortedPositive(rawCandidates);
+
+  while (candidates.length < 3) {
+    const last = candidates[candidates.length - 1] || stepKw;
+    candidates.push(last + stepKw);
+  }
+
+  return candidates.slice(0, 3);
+}
+
 export function buildScenarioPlans(base, diagnosis) {
   const routeKey = base.selectedRouteKey;
 
@@ -61,6 +86,7 @@ export function buildScenarioPlans(base, diagnosis) {
   const energyRisk = diagnosis.energyRisk || {};
   const storageRisk = diagnosis.storageRisk || {};
   const accessPortRisk = diagnosis.accessPortRisk || {};
+  const matrixPowerRisk = diagnosis.matrixPowerRisk || {};
   const deliveryServiceRisk = diagnosis.deliveryServiceRisk || {};
 
   const annualTotalUnmet =
@@ -81,7 +107,8 @@ export function buildScenarioPlans(base, diagnosis) {
     deltaTransformerKw: 0,
     deltaN7: 0,
     deltaN30: 0,
-    deltaMatrix: 0
+    deltaMatrix: 0,
+    deltaPMatrixKw: 0
   });
 
   const makeScenario = ({
@@ -159,11 +186,22 @@ export function buildScenarioPlans(base, diagnosis) {
           accessPortRisk.active
             ? `矩阵接口拥堵风险等级：${accessPortRisk.level}`
             : null,
-          residualQueue > 0
-            ? `压力月排队损失 ${round(residualQueue, 1)} kWh`
+          matrixPowerRisk.active
+            ? `矩阵功率池受限风险等级：${matrixPowerRisk.level}`
             : null,
-          annualTotalQueueUnmet > 0
-            ? `全年累计排队损失 ${round(annualTotalQueueUnmet, 1)} kWh`
+
+          diagnosis.stressMatrixQueueVehicleTicks > 0
+            ? `压力月矩阵接口排队车时 ${diagnosis.stressMatrixQueueVehicleTicks}`
+            : null,
+          diagnosis.annualMatrixQueueVehicleTicks > 0
+            ? `全年矩阵接口排队车时 ${diagnosis.annualMatrixQueueVehicleTicks}`
+            : null,
+
+          diagnosis.stressPMatrixLimitedEnergyKwh > 0
+            ? `压力月 P_matrix 受限能量 ${round(diagnosis.stressPMatrixLimitedEnergyKwh, 1)} kWh`
+            : null,
+          diagnosis.annualPMatrixLimitedEnergyKwh > 0
+            ? `全年 P_matrix 受限能量 ${round(diagnosis.annualPMatrixLimitedEnergyKwh, 1)} kWh`
             : null
         ].filter(Boolean);
 
@@ -344,55 +382,101 @@ export function buildScenarioPlans(base, diagnosis) {
       );
     }
   } else {
-    if (accessPortRisk.active) {
+    const hasPortRisk = accessPortRisk.active === true;
+    const hasPowerPoolRisk = matrixPowerRisk.active === true;
+
+    if (hasPortRisk || hasPowerPoolRisk) {
       const matrixCandidatesByLevel = {
         low: [
-          { deltaMatrix: 2, label: "N_matrix +2" },
-          { deltaMatrix: 4, label: "N_matrix +4" }
+          { deltaMatrix: 2 },
+          { deltaMatrix: 4 },
+          { deltaMatrix: 6 }
         ],
         medium: [
-          { deltaMatrix: 4, label: "N_matrix +4" },
-          { deltaMatrix: 6, label: "N_matrix +6" },
-          { deltaMatrix: 8, label: "N_matrix +8" }
+          { deltaMatrix: 4 },
+          { deltaMatrix: 6 },
+          { deltaMatrix: 8 }
         ],
         high: [
-          { deltaMatrix: 6, label: "N_matrix +6" },
-          { deltaMatrix: 10, label: "N_matrix +10" },
-          { deltaMatrix: 14, label: "N_matrix +14" }
+          { deltaMatrix: 6 },
+          { deltaMatrix: 10 },
+          { deltaMatrix: 14 }
         ]
       };
 
       const matrixCandidates =
-        matrixCandidatesByLevel[accessPortRisk.level] ||
-        matrixCandidatesByLevel.medium;
+        hasPortRisk
+          ? (
+              matrixCandidatesByLevel[accessPortRisk.level] ||
+              matrixCandidatesByLevel.medium
+            )
+          : [
+              { deltaMatrix: 0 },
+              { deltaMatrix: 0 },
+              { deltaMatrix: 0 }
+            ];
 
-      matrixCandidates.forEach((candidate, index) => {
+      const matrixPowerGapKw = Math.max(
+        safeNumber(diagnosis.stressPMatrixMaxGapKw, 0),
+        safeNumber(diagnosis.annualPMatrixMaxGapKw, 0)
+      );
+
+      const pMatrixCandidates =
+        hasPowerPoolRisk
+          ? buildAdaptivePMatrixCandidates(matrixPowerGapKw)
+          : [0, 0, 0];
+
+      for (let index = 0; index < 3; index += 1) {
+        const deltaMatrix =
+          safeNumber(matrixCandidates[index]?.deltaMatrix, 0);
+
+        const deltaPMatrixKw =
+          safeNumber(pMatrixCandidates[index], 0);
+
+        const labelParts = [];
+
+        if (deltaMatrix > 0) {
+          labelParts.push(`N_matrix +${deltaMatrix}`);
+        }
+
+        if (deltaPMatrixKw > 0) {
+          labelParts.push(`P_matrix +${deltaPMatrixKw} kW`);
+        }
+
+        const label =
+          labelParts.length > 0
+            ? labelParts.join(" / ")
+            : "未触发";
+
         scenarios.push(
           makeScenario({
             id: `S3-${index + 1}`,
             family: "S3",
-            title: "S3 服务能力加固",
-            variantLabel: candidate.label,
-            intent: "围绕柔性矩阵路线，测试不同接口扩容档位对矩阵端口拥堵风险的修复效果。",
+            title: "S3 柔性矩阵服务能力加固",
+            variantLabel: label,
+            intent:
+              "围绕柔性矩阵路线，联合测试接口端口扩容与矩阵功率池扩容，对接入拥堵与功率池受限风险的修复效果。",
             triggerBasis: [
               ...s3TriggerBasis,
-              `候选档位：${candidate.label}`
+              `候选档位：${label}`
             ],
             deltas: {
-              deltaMatrix: candidate.deltaMatrix
+              deltaMatrix,
+              deltaPMatrixKw
             }
           })
         );
-      });
+      }
     } else {
       scenarios.push(
         makeScenario({
           id: "S3-0",
           family: "S3",
-          title: "S3 服务能力加固",
+          title: "S3 柔性矩阵服务能力加固",
           variantLabel: "未触发",
-          intent: "当前矩阵接口拥堵风险不突出，本轮不主动生成 N_matrix 扩容搜索候选。",
-          triggerBasis: ["无显著矩阵接口拥堵风险，保留为说明性占位方案。"],
+          intent:
+            "当前矩阵接口拥堵风险与功率池受限风险均不突出，本轮不主动生成柔性矩阵服务侧扩容候选。",
+          triggerBasis: ["无显著矩阵服务侧风险，保留为说明性占位方案。"],
           deltas: zeroDeltas()
         })
       );
@@ -418,7 +502,8 @@ export function buildCompositeScenarioPlans(
     deltaTransformerKw: 0,
     deltaN7: 0,
     deltaN30: 0,
-    deltaMatrix: 0
+    deltaMatrix: 0,
+    deltaPMatrixKw: 0
   });
 
   const mergeDeltas = (scenarios) => {
@@ -433,6 +518,7 @@ export function buildCompositeScenarioPlans(
       merged.deltaN7 += safeNumber(d.deltaN7, 0);
       merged.deltaN30 += safeNumber(d.deltaN30, 0);
       merged.deltaMatrix += safeNumber(d.deltaMatrix, 0);
+      merged.deltaPMatrixKw += safeNumber(d.deltaPMatrixKw, 0);
     });
 
     return merged;
@@ -587,7 +673,8 @@ export function buildCompositeScenarioPlans(
       safeNumber(d.deltaTransformerKw, 0),
       safeNumber(d.deltaN7, 0),
       safeNumber(d.deltaN30, 0),
-      safeNumber(d.deltaMatrix, 0)
+      safeNumber(d.deltaMatrix, 0),
+      safeNumber(d.deltaPMatrixKw, 0)
     ].join("|");
 
     if (seenDeltaSignatures.has(signature)) return;

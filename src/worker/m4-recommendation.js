@@ -24,7 +24,11 @@ function normMax(value, min, max) {
   return clamp((value - min) / (max - min), 0, 1);
 }
 
-export function scoreScenarios(evaluated, weightsInput = {}) {
+export function scoreScenarios(
+  evaluated,
+  weightsInput = {},
+  routeKey = "traditional_pile"
+) {
   const w = {
     risk: safeNumber(weightsInput.scenarioRiskWeight, 0.44),
     capex: safeNumber(weightsInput.scenarioCapexWeight, 0.18),
@@ -36,6 +40,17 @@ export function scoreScenarios(evaluated, weightsInput = {}) {
 
   const annualUnmetValues = evaluated.map(s => safeNumber(s.annualValidation.totalUnmetKwh, 0));
   const overflowValues = evaluated.map(s => safeNumber(s.annualValidation.totalOverflowCount, 0));
+  const socRiskValues = evaluated.map(s =>
+    safeNumber(s.annualValidation.monthsWithSocRisk, 0)
+  );
+  const serviceRiskValues = evaluated.map(s =>
+    routeKey === "flex_matrix"
+      ? safeNumber(s.annualValidation.totalMatrixQueueVehicleTicks, 0)
+      : safeNumber(s.annualValidation.totalQueueUnmetKwh, 0)
+  );
+  const pMatrixLimitedValues = evaluated.map(s =>
+    safeNumber(s.annualValidation.totalPMatrixLimitedEnergyKwh, 0)
+  );
   const capexValues = evaluated.map(s => safeNumber(s.extraCapexWan, 0));
   const gridValues = evaluated.map(s => safeNumber(s.evaluationIndicators.gff, 0));
   const pvValues = evaluated.map(s => safeNumber(s.evaluationIndicators.pvur, 0));
@@ -44,6 +59,9 @@ export function scoreScenarios(evaluated, weightsInput = {}) {
   const ranges = {
     unmet: [Math.min(...annualUnmetValues), Math.max(...annualUnmetValues)],
     overflow: [Math.min(...overflowValues), Math.max(...overflowValues)],
+    soc: [Math.min(...socRiskValues), Math.max(...socRiskValues)],
+    service: [Math.min(...serviceRiskValues), Math.max(...serviceRiskValues)],
+    pMatrix: [Math.min(...pMatrixLimitedValues), Math.max(...pMatrixLimitedValues)],
     capex: [Math.min(...capexValues), Math.max(...capexValues)],
     grid: [Math.min(...gridValues), Math.max(...gridValues)],
     pv: [Math.min(...pvValues), Math.max(...pvValues)],
@@ -51,9 +69,86 @@ export function scoreScenarios(evaluated, weightsInput = {}) {
   };
 
   return evaluated.map((scenario) => {
-    const unmetScore = normMin(safeNumber(scenario.annualValidation.totalUnmetKwh, 0), ...ranges.unmet);
-    const overflowScore = normMin(safeNumber(scenario.annualValidation.totalOverflowCount, 0), ...ranges.overflow);
-    const riskScore = 0.72 * unmetScore + 0.28 * overflowScore;
+    const unmetScore = normMin(
+      safeNumber(scenario.annualValidation.totalUnmetKwh, 0),
+      ...ranges.unmet
+    );
+
+    const overflowScore = normMin(
+      safeNumber(scenario.annualValidation.totalOverflowCount, 0),
+      ...ranges.overflow
+    );
+
+    const socScore = normMin(
+      safeNumber(scenario.annualValidation.monthsWithSocRisk, 0),
+      ...ranges.soc
+    );
+
+    const serviceRiskValue =
+      routeKey === "flex_matrix"
+        ? safeNumber(scenario.annualValidation.totalMatrixQueueVehicleTicks, 0)
+        : safeNumber(scenario.annualValidation.totalQueueUnmetKwh, 0);
+
+    const queueServiceScore = normMin(
+      serviceRiskValue,
+      ...ranges.service
+    );
+
+    const pMatrixLimitedValue =
+      safeNumber(scenario.annualValidation.totalPMatrixLimitedEnergyKwh, 0);
+
+    const pMatrixScore = normMin(
+      pMatrixLimitedValue,
+      ...ranges.pMatrix
+    );
+
+    const serviceScore =
+      routeKey === "flex_matrix"
+        ? (queueServiceScore + pMatrixScore) / 2
+        : queueServiceScore;
+
+    const riskParts = [
+      {
+        key: "unmet",
+        score: unmetScore,
+        weight: 0.45,
+        active: ranges.unmet[1] > ranges.unmet[0]
+      },
+      {
+        key: "overflow",
+        score: overflowScore,
+        weight: 0.20,
+        active: ranges.overflow[1] > ranges.overflow[0]
+      },
+      {
+        key: "soc",
+        score: socScore,
+        weight: 0.20,
+        active: ranges.soc[1] > ranges.soc[0]
+      },
+      {
+        key: "service",
+        score: serviceScore,
+        weight: 0.15,
+        active: ranges.service[1] > ranges.service[0]
+      }
+    ];
+
+    const activeRiskParts = riskParts.filter((part) => part.active);
+    const usedRiskParts =
+      activeRiskParts.length > 0
+        ? activeRiskParts
+        : riskParts;
+
+    const usedRiskWeight =
+      usedRiskParts.reduce((sum, part) => sum + part.weight, 0) || 1;
+
+    const riskScore =
+      usedRiskParts.reduce(
+        (sum, part) => sum + part.score * part.weight,
+        0
+      ) / usedRiskWeight;
+
     const capexScore = normMin(safeNumber(scenario.extraCapexWan, 0), ...ranges.capex);
     const gridScore = normMax(safeNumber(scenario.evaluationIndicators.gff, 0), ...ranges.grid);
     const pvScore = normMax(safeNumber(scenario.evaluationIndicators.pvur, 0), ...ranges.pv);
@@ -72,6 +167,16 @@ export function scoreScenarios(evaluated, weightsInput = {}) {
       recommendation: {
         totalScore: round(totalScore * 100, 1),
         riskScore: round(riskScore * 100, 1),
+
+        unmetRiskScore: round(unmetScore * 100, 1),
+        overflowRiskScore: round(overflowScore * 100, 1),
+        socRiskScore: round(socScore * 100, 1),
+        serviceRiskScore: round(serviceScore * 100, 1),
+        serviceRiskMetric:
+          routeKey === "flex_matrix"
+            ? "totalMatrixQueueVehicleTicks"
+            : "totalQueueUnmetKwh",
+
         capexScore: round(capexScore * 100, 1),
         gridScore: round(gridScore * 100, 1),
         pvScore: round(pvScore * 100, 1),
@@ -209,7 +314,7 @@ export function buildRecommendation(scored) {
 
     explanation = recommendation
       ? shouldPrioritizeComposite
-        ? `当前无方案完全满足硬可行性约束，但已识别到多个主导风险方向同时需要回应，${recommendation.id} 被选为本轮综合折中改进候选。该方案属于${familyLabel}有效加固方案，对"${metricLabel}"形成了${Number.isFinite(improveRate) ? `${round(improveRate * 100, 1)}%` : "较明显"}改善；推荐逻辑在存在多类有效专项风险时，优先从综合方案族中选择，再在其中比较风险改善、追加投资与综合评分。`
+        ? `当前无方案完全满足硬可行性约束，但已识别到多个主导风险方向同时需要回应，${recommendation.id} 被选为本轮综合折中改进候选。该方案属于${familyLabel}有效加固方案，对"${metricLabel}"形成了${Number.isFinite(improveRate) ? `${round(improveRate * 100, 1)}%` : "较明显"}改善；推荐逻辑在存在多类有效专项风险时，优先从综合方案族中选择，并在综合方案族内按综合评分确定当前推荐。`
         : `当前无方案完全满足硬可行性约束，${recommendation.id} 被选为本轮折中改进候选。该方案属于${familyLabel}有效加固方案，对"${metricLabel}"形成了${Number.isFinite(improveRate) ? `${round(improveRate * 100, 1)}%` : "较明显"}改善；推荐逻辑优先保留接近最佳风险改善幅度的候选，再在其中选择综合评分更均衡者。`
       : "当前无硬可行方案，但已识别到部分有效改善候选。";
   } else {
@@ -226,15 +331,16 @@ export function buildRecommendation(scored) {
   )[0] || null;
 
   const highProtection = [...pool].sort((a, b) => {
-    const aRisk =
-      safeNumber(a.annualValidation?.totalUnmetKwh, 0) +
-      safeNumber(a.annualValidation?.totalOverflowCount, 0) * 100;
+    const riskDiff =
+      safeNumber(b.recommendation?.riskScore, 0) -
+      safeNumber(a.recommendation?.riskScore, 0);
 
-    const bRisk =
-      safeNumber(b.annualValidation?.totalUnmetKwh, 0) +
-      safeNumber(b.annualValidation?.totalOverflowCount, 0) * 100;
+    if (riskDiff !== 0) return riskDiff;
 
-    return aRisk - bRisk;
+    return (
+      safeNumber(b.recommendation?.totalScore, 0) -
+      safeNumber(a.recommendation?.totalScore, 0)
+    );
   })[0] || null;
 
   return {

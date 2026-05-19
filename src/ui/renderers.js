@@ -706,7 +706,24 @@ function renderM4ScenarioDeltaCards(el, scenario, routeKey) {
   el.deltaService.textContent =
     routeKey === "traditional_pile"
       ? `7kW +${d.deltaN7 || 0} / 30kW +${d.deltaN30 || 0}`
-      : `N_matrix +${d.deltaMatrix || 0}`;
+      : (() => {
+          const deltaMatrix = d.deltaMatrix || 0;
+          const deltaPMatrixKw = d.deltaPMatrixKw || 0;
+
+          const parts = [];
+
+          if (deltaMatrix > 0) {
+            parts.push(`N_matrix +${deltaMatrix}`);
+          }
+
+          if (deltaPMatrixKw > 0) {
+            parts.push(`P_matrix +${deltaPMatrixKw} kW`);
+          }
+
+          return parts.length > 0
+            ? parts.join(" / ")
+            : "N_matrix +0 / P_matrix +0 kW";
+        })();
 }
 
 function renderM4Summary(state) {

@@ -75,6 +75,8 @@ function calcExtraCapexWan(base, scenario) {
   const cost30kw = safeNumber(input.cost30kw, 2.50);
   const transformerUpgradeCostWanPerKw =
     safeNumber(input.transformerUpgradeCostWanPerKw, 0);
+  const matrixPowerUpgradeCostWanPerKw =
+    safeNumber(input.matrixPowerUpgradeCostWanPerKw, 0.02);
 
   const finalStorage = base.config.E_storage + safeNumber(d.deltaStorageKwh, 0);
   const pvYuan = safeNumber(d.deltaPvKw, 0) * 1000 * pvPrice * (1 + pvRate / 100);
@@ -82,6 +84,9 @@ function calcExtraCapexWan(base, scenario) {
   const pcsYuan = safeNumber(d.deltaPcsKw, 0) * 450 * (1 + storRate / 100);
   const chargersWan = safeNumber(d.deltaN7, 0) * cost7kw + safeNumber(d.deltaN30, 0) * cost30kw;
   const matrixWan = safeNumber(d.deltaMatrix, 0) * 0.08;
+  const matrixPowerWan =
+    safeNumber(d.deltaPMatrixKw, 0) *
+    matrixPowerUpgradeCostWanPerKw;
   const transformerWan =
     safeNumber(d.deltaTransformerKw, 0) *
     transformerUpgradeCostWanPerKw;
@@ -90,6 +95,7 @@ function calcExtraCapexWan(base, scenario) {
     (pvYuan + essYuan + pcsYuan) / 10000 +
     chargersWan +
     matrixWan +
+    matrixPowerWan +
     transformerWan,
     2
   );
@@ -121,12 +127,38 @@ function materializeScenarioPayload(base, scenario, extraCapexWan) {
     params.nMatrixP99 = Math.max(safeNumber(base.params.nMatrixP99, params.nMatrix), params.nMatrix);
     params.nMatrixMax = Math.max(safeNumber(base.params.nMatrixMax, params.nMatrix), params.nMatrix);
 
-    // P_matrix 固定继承：候选方案阶段不优化功率池，
-    // 统一沿用 M3 已验证的 pMatrixKw，避免评估口径漂移。
-    params.pMatrixKw = base.params.pMatrixKw ?? null;
-    params.pMatrixP95Kw = base.params.pMatrixP95Kw ?? null;
-    params.pMatrixP99Kw = base.params.pMatrixP99Kw ?? null;
-    params.pMatrixMaxKw = base.params.pMatrixMaxKw ?? null;
+    // R4-I：P_matrix 纳入 M4 柔性矩阵服务侧优化变量
+    const basePMatrixKw = safeNumber(base.params.pMatrixKw, 0);
+    const deltaPMatrixKw = safeNumber(d.deltaPMatrixKw, 0);
+
+    params.pMatrixKw =
+      basePMatrixKw > 0 || deltaPMatrixKw > 0
+        ? basePMatrixKw + deltaPMatrixKw
+        : null;
+
+    params.pMatrixP95Kw =
+      params.pMatrixKw == null
+        ? base.params.pMatrixP95Kw ?? null
+        : Math.max(
+            safeNumber(base.params.pMatrixP95Kw, params.pMatrixKw),
+            params.pMatrixKw
+          );
+
+    params.pMatrixP99Kw =
+      params.pMatrixKw == null
+        ? base.params.pMatrixP99Kw ?? null
+        : Math.max(
+            safeNumber(base.params.pMatrixP99Kw, params.pMatrixKw),
+            params.pMatrixKw
+          );
+
+    params.pMatrixMaxKw =
+      params.pMatrixKw == null
+        ? base.params.pMatrixMaxKw ?? null
+        : Math.max(
+            safeNumber(base.params.pMatrixMaxKw, params.pMatrixKw),
+            params.pMatrixKw
+          );
   }
 
   return {
@@ -429,7 +461,17 @@ function buildFamilyEffectiveness(scenario, improvement, routeKey) {
     const rate =
       routeKey === "traditional_pile"
         ? annual.queueUnmetReductionRate
-        : annual.matrixQueueVehicleTicksReductionRate;
+        : (() => {
+            const queueRate =
+              annual.matrixQueueVehicleTicksReductionRate;
+
+            const powerPoolRate =
+              annual.pMatrixLimitedEnergyReductionRate;
+
+            if (queueRate == null && powerPoolRate == null) return null;
+
+            return Math.max(queueRate ?? 0, powerPoolRate ?? 0);
+          })();
 
     const level = classifyImprovement(rate);
 
@@ -438,11 +480,11 @@ function buildFamilyEffectiveness(scenario, improvement, routeKey) {
       primaryMetricKey:
         routeKey === "traditional_pile"
           ? "annualQueueUnmetReductionRate"
-          : "annualMatrixQueueVehicleTicksReductionRate",
+          : "max(annualMatrixQueueVehicleTicksReductionRate, annualPMatrixLimitedEnergyReductionRate)",
       primaryMetricLabel:
         routeKey === "traditional_pile"
           ? "全年排队损失下降率"
-          : "全年矩阵接口排队车时下降率",
+          : "全年矩阵接口排队车时 / P_matrix 受限能量改善率",
       primaryReductionRate: rate,
       level,
       isMeaningful: isMeaningfulImprovement(level),
@@ -474,9 +516,19 @@ function buildFamilyEffectiveness(scenario, improvement, routeKey) {
       }
 
       if (componentFamily === "S3") {
-        return routeKey === "traditional_pile"
-          ? annual.queueUnmetReductionRate
-          : annual.matrixQueueVehicleTicksReductionRate;
+        if (routeKey === "traditional_pile") {
+          return annual.queueUnmetReductionRate;
+        }
+
+        const queueRate =
+          annual.matrixQueueVehicleTicksReductionRate;
+
+        const powerPoolRate =
+          annual.pMatrixLimitedEnergyReductionRate;
+
+        if (queueRate == null && powerPoolRate == null) return null;
+
+        return Math.max(queueRate ?? 0, powerPoolRate ?? 0);
       }
 
       return null;
@@ -576,7 +628,8 @@ export function runM4FinalPlanner(context) {
 
   const scoredSpecialized = scoreScenarios(
     specializedWithImprovement,
-    context.input?.m4 || {}
+    context.input?.m4 || {},
+    base.selectedRouteKey
   );
 
   // ============================================================
@@ -609,7 +662,8 @@ export function runM4FinalPlanner(context) {
 
   const scored = scoreScenarios(
     allWithImprovement,
-    context.input?.m4 || {}
+    context.input?.m4 || {},
+    base.selectedRouteKey
   );
 
   const recommendation = buildRecommendation(scored);

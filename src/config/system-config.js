@@ -49,6 +49,7 @@ export const DEFAULT_PROJECT_INPUT = {
     cost7kw: 0.30,
     cost30kw: 2.50,
     transformerUpgradeCostWanPerKw: 0.03,
+    matrixPowerUpgradeCostWanPerKw: 0.02,
     ems: 10,
     roofArea: 10000,
     evRatio: 3,

@@ -1759,6 +1759,7 @@ function renderM4Summary(state) {
     recommendation
   );
 
+
   el.scenarioTableBody.innerHTML = scenarios.map((scenario) => {
     const score = scenario.recommendation?.totalScore != null
       ? formatNumber(scenario.recommendation.totalScore, 1)
@@ -1913,4 +1914,5 @@ export function renderApp(state) {
   renderM2Summary(state);
   renderM3Summary(state);
   renderM4Summary(state);
+
 }

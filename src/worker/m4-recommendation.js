@@ -261,9 +261,31 @@ export function buildRecommendation(scored) {
     meaningfulSpecialized.map((s) => s.family)
   );
 
+  const bestMeaningfulOverall =
+    pickBalancedImprovedCandidate(meaningfulImproved);
+
+  const bestMeaningfulComposite =
+    pickBestCompositeByTotalScore(meaningfulComposite);
+
+  const COMPOSITE_SCORE_TOLERANCE = 3.0;
+
+  const bestOverallScore = safeNumber(
+    bestMeaningfulOverall?.recommendation?.totalScore,
+    -Infinity
+  );
+
+  const bestCompositeScore = safeNumber(
+    bestMeaningfulComposite?.recommendation?.totalScore,
+    -Infinity
+  );
+
+  const compositeIsCompetitive =
+    bestCompositeScore >= bestOverallScore - COMPOSITE_SCORE_TOLERANCE;
+
   const shouldPrioritizeComposite =
     activeMeaningfulFamilies.size >= 2 &&
-    meaningfulComposite.length > 0;
+    meaningfulComposite.length > 0 &&
+    compositeIsCompetitive;
 
   let status = "no_effective_solution";
   let recommendation = null;

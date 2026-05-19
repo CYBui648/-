@@ -248,18 +248,6 @@ export function buildScenarioPlans(base, diagnosis) {
         })
       );
     });
-  } else {
-    scenarios.push(
-      makeScenario({
-        id: "S1-0",
-        family: "S1",
-        title: "S1 接入功率边界加固",
-        variantLabel: "未触发",
-        intent: "当前功率边界风险不突出，本轮不主动生成接入容量扩容搜索候选。",
-        triggerBasis: ["无显著功率风险，保留为说明性占位方案。"],
-        deltas: zeroDeltas()
-      })
-    );
   }
 
   // ============================================================
@@ -308,18 +296,6 @@ export function buildScenarioPlans(base, diagnosis) {
         })
       );
     });
-  } else {
-    scenarios.push(
-      makeScenario({
-        id: "S2-0",
-        family: "S2",
-        title: "S2 储能韧性加固",
-        variantLabel: "未触发",
-        intent: "当前能量与 SOC 风险不突出，本轮不主动生成储能加固搜索候选。",
-        triggerBasis: ["无显著能量/SOC 风险，保留为说明性占位方案。"],
-        deltas: zeroDeltas()
-      })
-    );
   }
 
   // ============================================================
@@ -368,18 +344,6 @@ export function buildScenarioPlans(base, diagnosis) {
           })
         );
       });
-    } else {
-      scenarios.push(
-        makeScenario({
-          id: "S3-0",
-          family: "S3",
-          title: "S3 服务能力加固",
-          variantLabel: "未触发",
-          intent: "当前传统桩服务风险不突出，本轮不主动生成固定桩扩容搜索候选。",
-          triggerBasis: ["无显著传统桩接入服务风险，保留为说明性占位方案。"],
-          deltas: zeroDeltas()
-        })
-      );
     }
   } else {
     const hasPortRisk = accessPortRisk.active === true;
@@ -467,19 +431,6 @@ export function buildScenarioPlans(base, diagnosis) {
           })
         );
       }
-    } else {
-      scenarios.push(
-        makeScenario({
-          id: "S3-0",
-          family: "S3",
-          title: "S3 柔性矩阵服务能力加固",
-          variantLabel: "未触发",
-          intent:
-            "当前矩阵接口拥堵风险与功率池受限风险均不突出，本轮不主动生成柔性矩阵服务侧扩容候选。",
-          triggerBasis: ["无显著矩阵服务侧风险，保留为说明性占位方案。"],
-          deltas: zeroDeltas()
-        })
-      );
     }
   }
 

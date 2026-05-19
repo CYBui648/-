@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MGS V2-4.5 架构重写版</title>
   <link rel="stylesheet" href="./style.css" />
+  <script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -159,7 +160,7 @@
   <div class="m1-layout">
     <section class="input-stack">
       <article class="info-card input-card">
-        <h4>园区与需求画像</h4>
+        <h4>Table 1. 园区与需求画像参数</h4>
         <div class="form-grid">
           <label>典型城市
             <select data-m1-input="climateKey" id="m1-climateKey">
@@ -177,136 +178,84 @@
               <option value="xining">西宁</option>
             </select>
           </label>
-          <label>园区电动车数
-            <input type="number" data-m1-input="evCount" min="0" max="1000" step="5">
-          </label>
-          <label>固定车占比
-            <input type="number" data-m1-input="teacherRatio" min="0.30" max="0.95" step="0.05">
-          </label>
-          <label>低电量焦虑率
-            <input type="number" data-m1-input="anxietyRatio" min="0" max="1" step="0.05">
-          </label>
-          <label>平均电池容量 kWh
-            <input type="number" data-m1-input="batteryCapMean" min="40" max="100" step="5">
-          </label>
-          <label>平均入场 SOC
-            <input type="number" data-m1-input="initSocMean" min="0.10" max="0.80" step="0.05">
-          </label>
-          <label>目标充电 SOC
-            <input type="number" data-m1-input="targetSocMean" min="0.70" max="1" step="0.05">
-          </label>
-          <label>节假日充电比例
-            <input type="number" data-m1-input="holidayRatio" min="0" max="0.30" step="0.01">
-          </label>
+          <label>园区电动车数 (辆) <input type="number" data-m1-input="evCount" min="0" max="1000" step="5"></label>
+          <label>固定车占比 (-) <input type="number" data-m1-input="teacherRatio" min="0.30" max="0.95" step="0.05"></label>
+          <label>低电量焦虑率 (-) <input type="number" data-m1-input="anxietyRatio" min="0" max="1" step="0.05"></label>
+          <label>平均电池容量 (kWh) <input type="number" data-m1-input="batteryCapMean" min="40" max="100" step="5"></label>
+          <label>平均入场 SOC (-) <input type="number" data-m1-input="initSocMean" min="0.10" max="0.80" step="0.05"></label>
+          <label>目标充电 SOC (-) <input type="number" data-m1-input="targetSocMean" min="0.70" max="1" step="0.05"></label>
+          <label>节假日充电比例 (-) <input type="number" data-m1-input="holidayRatio" min="0" max="0.30" step="0.01"></label>
         </div>
       </article>
 
       <article class="info-card input-card">
-        <h4>边界与目标</h4>
+        <h4>Table 2. 边界约束与优化目标</h4>
         <div class="form-grid">
-          <label>快充 SLA
-            <input type="number" data-m1-input="slaFast" min="0.80" max="1" step="0.01">
-          </label>
-          <label>慢充 SLA
-            <input type="number" data-m1-input="slaSlow" min="0.70" max="1" step="0.01">
-          </label>
-          <label>新能源覆盖率目标
-            <input type="number" data-m1-input="renewableTarget" min="0" max="1" step="0.05">
-          </label>
-          <label>储能保底天数
-            <input type="number" data-m1-input="backupDays" min="0" max="7" step="1">
-          </label>
-          <label>屋顶面积 m²
-            <input type="number" data-m1-input="roofArea" min="2000" max="50000" step="500">
-          </label>
-          <label>车桩比上限
-            <input type="number" data-m1-input="evRatio" min="1" max="10" step="1">
-          </label>
+          <label>快充 SLA (-) <input type="number" data-m1-input="slaFast" min="0.80" max="1" step="0.01"></label>
+          <label>慢充 SLA (-) <input type="number" data-m1-input="slaSlow" min="0.70" max="1" step="0.01"></label>
+          <label>新能源覆盖率目标 (-) <input type="number" data-m1-input="renewableTarget" min="0" max="1" step="0.05"></label>
+          <label>储能保底天数 (d) <input type="number" data-m1-input="backupDays" min="0" max="7" step="1"></label>
+          <label>屋顶面积 (m²) <input type="number" data-m1-input="roofArea" min="2000" max="50000" step="500"></label>
+          <label>车桩比上限 (-) <input type="number" data-m1-input="evRatio" min="1" max="10" step="1"></label>
         </div>
       </article>
 
       <article class="info-card input-card">
-        <h4>成本参数</h4>
+        <h4>Table 3. 系统成本与效率参数</h4>
         <div class="form-grid">
-          <label>PV 单价 元/W
-            <input type="number" data-m1-input="pvPrice" min="1" max="2" step="0.05">
-          </label>
-          <label>PV 施工费率 %
-            <input type="number" data-m1-input="pvRate" min="10" max="20" step="1">
-          </label>
-          <label>ESS 单价 元/Wh
-            <input type="number" data-m1-input="storBasePrice" min="0.6" max="1.3" step="0.05">
-          </label>
-          <label>ESS 施工费率 %
-            <input type="number" data-m1-input="storRate" min="8" max="18" step="1">
-          </label>
-          <label>7kW 桩价 万元
-            <input type="number" data-m1-input="cost7kw" min="0.1" max="0.6" step="0.05">
-          </label>
-          <label>30kW 桩价 万元
-            <input type="number" data-m1-input="cost30kw" min="1.5" max="4" step="0.1">
-          </label>
-          <label>EMS 造价 万元
-            <input type="number" data-m1-input="ems" min="5" max="20" step="1">
-          </label>
-          <label>PV 有效效率
-            <input type="number" data-m1-input="pvEfficiency" min="0.65" max="0.80" step="0.01">
-          </label>
+          <label>PV 单价 (元/W) <input type="number" data-m1-input="pvPrice" min="1" max="2" step="0.05"></label>
+          <label>PV 施工费率 (%) <input type="number" data-m1-input="pvRate" min="10" max="20" step="1"></label>
+          <label>ESS 单价 (元/Wh) <input type="number" data-m1-input="storBasePrice" min="0.6" max="1.3" step="0.05"></label>
+          <label>ESS 施工费率 (%) <input type="number" data-m1-input="storRate" min="8" max="18" step="1"></label>
+          <label>7kW 桩价 (万元) <input type="number" data-m1-input="cost7kw" min="0.1" max="0.6" step="0.05"></label>
+          <label>30kW 桩价 (万元) <input type="number" data-m1-input="cost30kw" min="1.5" max="4" step="0.1"></label>
+          <label>EMS 造价 (万元) <input type="number" data-m1-input="ems" min="5" max="20" step="1"></label>
+          <label>PV 有效效率 (-) <input type="number" data-m1-input="pvEfficiency" min="0.65" max="0.80" step="0.01"></label>
         </div>
       </article>
     </section>
 
     <section class="output-stack">
       <article class="result-summary-card">
-        <span class="eyebrow">M1 结果摘要</span>
-        <h4 id="m1-summary-title">尚未运行真实规划。</h4>
-        <p id="m1-summary-meta">运行后，这里会显示城市、气候区与新能源目标。</p>
+        <span class="eyebrow">M1 运行状态摘要</span>
+        <h4 id="m1-summary-title">系统基准规划方案尚未生成</h4>
+        <p id="m1-summary-meta">配置左侧 Table 参数后点击右上方按钮执行连续仿真计算。</p>
       </article>
 
       <div class="metric-grid" id="m1-metrics">
-        <div class="metric-card"><span>光伏装机</span><strong id="m1-pv">--</strong><small>kW</small></div>
-        <div class="metric-card"><span>储能容量</span><strong id="m1-storage">--</strong><small>kWh</small></div>
-        <div class="metric-card"><span>PCS 功率</span><strong id="m1-pcs">--</strong><small>kW</small></div>
-        <div class="metric-card"><span>总投资</span><strong id="m1-capex">--</strong><small>万元</small></div>
-        <div class="metric-card"><span>7kW / 30kW 桩</span><strong id="m1-piles">--</strong><small>台</small></div>
-        <div class="metric-card"><span>新能源覆盖率</span><strong id="m1-renewable">--</strong><small>%</small></div>
-        <div class="metric-card"><span>日均服务电量</span><strong id="m1-daily-kwh">--</strong><small>kWh</small></div>
-        <div class="metric-card"><span>LCOE</span><strong id="m1-lcoe">--</strong><small>元/kWh</small></div>
+        <div class="metric-card"><span>光伏容量</span><div><strong id="m1-pv">--</strong><small>kW</small></div></div>
+        <div class="metric-card"><span>储能容量</span><div><strong id="m1-storage">--</strong><small>kWh</small></div></div>
+        <div class="metric-card"><span>PCS 功率</span><div><strong id="m1-pcs">--</strong><small>kW</small></div></div>
+        <div class="metric-card"><span>初始投资</span><div><strong id="m1-capex">--</strong><small>万元</small></div></div>
+        <div class="metric-card"><span>配置桩数</span><div><strong id="m1-piles">--</strong><small>台</small></div></div>
+        <div class="metric-card"><span>新能源覆盖</span><div><strong id="m1-renewable">--</strong><small>%</small></div></div>
+        <div class="metric-card"><span>日均服务量</span><div><strong id="m1-daily-kwh">--</strong><small>kWh</small></div></div>
+        <div class="metric-card"><span>度电成本</span><div><strong id="m1-lcoe">--</strong><small>元/kWh</small></div></div>
       </div>
 
       <section class="insight-grid m1-insight-grid">
         <article class="info-card insight-card">
-          <div class="chart-card-head">
-            <div>
-              <h4>投资构成</h4>
-              <p class="helper-copy">拆分光伏、储能、充电桩与 EMS 投资，说明基准方案的钱花在哪。</p>
-            </div>
-          </div>
-          <div class="stack-chart" id="m1-capex-chart">
-            <div class="insight-chart-empty">运行 M1 后展示投资构成。</div>
+          <div id="m1-capex-echart" style="width: 100%; height: 260px;"></div>
+          <div class="chart-modern-header">
+            <h4>投资成本构成 (CAPEX Breakdown)</h4>
           </div>
         </article>
 
         <article class="info-card insight-card">
-          <div class="chart-card-head">
-            <div>
-              <h4>标准周功率模拟</h4>
-              <p class="helper-copy">展示 7 天标准周内充电负荷、光伏出力与储能 SOC 的连续变化。</p>
-            </div>
-          </div>
-          <div class="power-profile-chart" id="m1-power-chart">
-            <div class="insight-chart-empty">运行 M1 后展示标准周功率模拟。</div>
+          <div id="m1-power-echart" style="width: 100%; height: 380px;"></div>
+          <div class="chart-modern-header">
+            <h4>标准周功率与储能模拟 (7-Day Power Profile & SOC)</h4>
           </div>
         </article>
       </section>
 
       <article class="info-card m1-diagnosis-card">
-        <h4>需求与约束摘要</h4>
+        <h4>Table 4. 系统运行约束与能效诊断摘要</h4>
         <div class="diagnosis-grid">
-          <div><span>标准周峰值</span><strong id="m1-peak">-- kW</strong></div>
-          <div><span>平均单次需求</span><strong id="m1-avg-need">-- kWh</strong></div>
-          <div><span>弃光率</span><strong id="m1-curtailment">--%</strong></div>
-          <div><span>年购电量</span><strong id="m1-grid-annual">-- kWh</strong></div>
+          <div><span>标准周负荷峰值</span><strong id="m1-peak">-- kW</strong></div>
+          <div><span>车辆平均单次充电需求</span><strong id="m1-avg-need">-- kWh</strong></div>
+          <div><span>系统弃光率</span><strong id="m1-curtailment">--%</strong></div>
+          <div><span>年向电网购电量</span><strong id="m1-grid-annual">-- kWh</strong></div>
         </div>
       </article>
 
@@ -576,6 +525,21 @@
         <span>M4 承接重点</span>
         <strong id="m3-annual-m4-focus">--</strong>
       </div>
+    </div>
+  </article>
+
+  <article class="info-card m3-annual-stress-card">
+    <div class="annual-chart-head">
+      <div>
+        <h4>M3-B 全年压力测试曲线</h4>
+        <p class="helper-copy" id="m3-annual-stress-meta">
+          完成所选路线全年验证后，这里将展示全年连续调度曲线，用于对照原始压力与调度后负荷。
+        </p>
+      </div>
+    </div>
+
+    <div class="m3-annual-stress-chart" id="m3-annual-stress-chart">
+      <div class="insight-chart-empty">完成 M3-B 全年验证后展示全年压力测试曲线。</div>
     </div>
   </article>
 

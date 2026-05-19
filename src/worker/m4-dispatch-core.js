@@ -1315,7 +1315,18 @@ function runFlexibleMatrixAnnualDispatch(payload) {
       annualLCOE
     };
 
-    return { monthly: monthlyResults, annual };
+    return {
+      monthly: monthlyResults,
+      annual,
+      chartData: {
+        demand: Array.from(demandSeries),
+        rawDemand: Array.from(rawDemandSeries),
+        active: Array.from(activeSeries),
+        limit: Array.from(limitSeries),
+        pv: Array.from(pvSeries),
+        soc: Array.from(socSeries)
+      }
+    };
   }
 
 function runTraditionalPileDispatch(payload) {
@@ -1791,7 +1802,18 @@ function runTraditionalPileAnnualDispatch(payload) {
       annualLCOE
     };
 
-    return { monthly: monthlyResults, annual };
+    return {
+      monthly: monthlyResults,
+      annual,
+      chartData: {
+        demand: Array.from(demandSeries),
+        rawDemand: Array.from(rawDemandSeries),
+        active: Array.from(activeSeries),
+        limit: Array.from(limitSeries),
+        pv: Array.from(pvSeries),
+        soc: Array.from(socSeries)
+      }
+    };
   }
 
 function runAnnualValidation(payload) {
@@ -1804,7 +1826,8 @@ function runAnnualValidation(payload) {
   return {
     preferred,
     monthly: result.monthly,
-    annual: result.annual
+    annual: result.annual,
+    chartData: result.chartData || null
   };
 }
 export {

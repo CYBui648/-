@@ -48,8 +48,8 @@ export const dom = {
     avgNeed: document.getElementById("m1-avg-need"),
     curtailment: document.getElementById("m1-curtailment"),
     gridAnnual: document.getElementById("m1-grid-annual"),
-    capexChart: document.getElementById("m1-capex-chart"),
-    powerChart: document.getElementById("m1-power-chart")
+    capexChart: document.getElementById("m1-capex-echart"),
+    powerChart: document.getElementById("m1-power-echart")
   },
   m2Summary: {
     title: document.getElementById("m2-summary-title"),
@@ -110,6 +110,8 @@ m3Summary: {
   annualFocusMonths: document.getElementById("m3-annual-focus-months"),
   annualM4Focus: document.getElementById("m3-annual-m4-focus"),
 
+  annualStressMeta: document.getElementById("m3-annual-stress-meta"),
+  annualStressChart: document.getElementById("m3-annual-stress-chart"),
   annualChartMeta: document.getElementById("m3-annual-chart-meta"),
   annualUnmetChart: document.getElementById("m3-annual-unmet-chart"),
   annualServiceChart: document.getElementById("m3-annual-service-chart"),

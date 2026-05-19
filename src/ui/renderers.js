@@ -188,20 +188,24 @@ function renderSeriesProfileChart(container, series, options = {}) {
   const pointCount = Math.max(load.length, pv.length, grid.length, soc.length, 2);
   const visibleDays = timelineDays * ((windowEndPct - windowStartPct) / 100);
   const width = 960;
-  const height = 420;
+  const height = 440;
   const left = 68;
   const right = 68;
   const top = 38;
   const bottom = 58;
   const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
+  const socBandHeight = 68;
+  const socGap = 22;
+  const powerPlotHeight = height - top - bottom - socGap - socBandHeight;
+  const socTop = top + powerPlotHeight + socGap;
+  const chartBottom = socTop + socBandHeight;
   const clipId = `profile-clip-${Math.random().toString(36).slice(2)}`;
   const powerMax = Math.max(...load, ...pv, ...grid, Number(options.limitKw || 0), 1);
   const socMax = 100;
 
   const xScale = (index) => left + (index / Math.max(1, pointCount - 1)) * plotWidth;
-  const yPower = (value) => top + plotHeight - (Math.max(0, value) / powerMax) * plotHeight;
-  const ySoc = (value) => top + plotHeight - (Math.max(0, Math.min(socMax, value)) / socMax) * plotHeight;
+  const yPower = (value) => top + powerPlotHeight - (Math.max(0, value) / powerMax) * powerPlotHeight;
+  const ySoc = (value) => socTop + socBandHeight - (Math.max(0, Math.min(socMax, value)) / socMax) * socBandHeight;
   const limitY = yPower(Number(options.limitKw || 0));
 
   const ticks = options.tickBuilder
@@ -211,7 +215,7 @@ function renderSeriesProfileChart(container, series, options = {}) {
   const axisTicks = ticks.map((tick, index) => {
     const x = left + tick.ratio * plotWidth;
     return `
-      <line class="profile-grid" x1="${x}" y1="${top}" x2="${x}" y2="${top + plotHeight}" />
+      <line class="profile-grid" x1="${x}" y1="${top}" x2="${x}" y2="${chartBottom}" />
       <text class="profile-axis-label profile-time-tick" data-profile-tick="${index}" x="${x}" y="${height - 22}">${tick.label}</text>
     `;
   }).join("");
@@ -247,18 +251,22 @@ function renderSeriesProfileChart(container, series, options = {}) {
       <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="功率画像" data-profile-main-svg data-profile-width="${width}" data-profile-height="${height}">
         <defs>
           <clipPath id="${clipId}">
-            <rect x="${left}" y="${top - 6}" width="${plotWidth}" height="${plotHeight + 12}" />
+            <rect x="${left}" y="${top - 6}" width="${plotWidth}" height="${chartBottom - top + 12}" />
           </clipPath>
         </defs>
-        <line class="profile-axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + plotHeight}" />
-        <line class="profile-axis" x1="${left}" y1="${top + plotHeight}" x2="${left + plotWidth}" y2="${top + plotHeight}" />
+        <line class="profile-axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + powerPlotHeight}" />
+        <line class="profile-axis" x1="${left}" y1="${top + powerPlotHeight}" x2="${left + plotWidth}" y2="${top + powerPlotHeight}" />
+        <rect class="profile-soc-band" x="${left}" y="${socTop}" width="${plotWidth}" height="${socBandHeight}" />
+        <line class="profile-axis" x1="${left}" y1="${socTop}" x2="${left}" y2="${chartBottom}" />
+        <line class="profile-axis" x1="${left}" y1="${chartBottom}" x2="${left + plotWidth}" y2="${chartBottom}" />
         ${axisTicks}
         <line class="profile-grid" x1="${left}" y1="${top}" x2="${left + plotWidth}" y2="${top}" />
-        <line class="profile-grid" x1="${left}" y1="${top + plotHeight / 2}" x2="${left + plotWidth}" y2="${top + plotHeight / 2}" />
+        <line class="profile-grid" x1="${left}" y1="${top + powerPlotHeight / 2}" x2="${left + plotWidth}" y2="${top + powerPlotHeight / 2}" />
+        <line class="profile-grid" x1="${left}" y1="${socTop + socBandHeight / 2}" x2="${left + plotWidth}" y2="${socTop + socBandHeight / 2}" />
         <text class="profile-axis-label" x="8" y="${top + 4}">${formatNumber(powerMax, 0)} kW</text>
-        <text class="profile-axis-label" x="18" y="${top + plotHeight + 4}">0</text>
-        <text class="profile-axis-label" x="${width - 52}" y="${top + 4}">SOC 100%</text>
-        <text class="profile-axis-label" x="${width - 36}" y="${top + plotHeight + 4}">0%</text>
+        <text class="profile-axis-label" x="18" y="${top + powerPlotHeight + 4}">0</text>
+        <text class="profile-axis-label profile-soc-label" x="${width - 60}" y="${socTop + 4}">SOC 100%</text>
+        <text class="profile-axis-label profile-soc-label" x="${width - 36}" y="${chartBottom + 4}">0%</text>
         ${options.limitKw ? `
           <line class="profile-limit" x1="${left}" y1="${limitY}" x2="${left + plotWidth}" y2="${limitY}" />
           <text class="profile-limit-label" x="${left + plotWidth - 86}" y="${limitY - 6}">变压器红线</text>
@@ -544,6 +552,443 @@ function renderM2MonthChart(container, result) {
       <span>峰值 ${formatNumber(worst.peak, 1)} kW · 越限 ${worst.overflowTicks || 0} tick · 排队峰值 ${formatNumber(worst.queuePeak || 0, 0)} · 最低 SOC ${formatNumber(worst.minSoc, 1)}%</span>
     </div>
   `);
+}
+
+function renderM2MonthEChart(container, result) {
+  const chartData = result?.chartData;
+  const ev = chartData?.ev || [];
+  if (!container || !chartData || !Array.isArray(ev) || ev.length === 0) {
+    resetInsightChart(container, "运行 M2 后展示压力月连续功率曲线。");
+    return;
+  }
+
+  const pointsPerDay = 96;
+  const worst = pickM2WorstDay(result);
+  const previousChartEl = container.querySelector("[data-m2-month-echart]");
+  if (previousChartEl && typeof echarts !== "undefined") {
+    const previous = echarts.getInstanceByDom(previousChartEl);
+    if (previous) previous.dispose();
+  }
+
+  if (typeof echarts === "undefined") {
+    resetInsightChart(container, "ECharts 未加载，暂无法展示压力月曲线。");
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="worst-day-note">
+      <strong>最高风险日：第 ${worst.day + 1} 天</strong>
+      <span>峰值 ${formatNumber(worst.peak, 1)} kW · 越限 ${worst.overflowTicks || 0} tick · 排队峰值 ${formatNumber(worst.queuePeak || 0, 0)} · 最低 SOC ${formatNumber(worst.minSoc, 1)}%</span>
+    </div>
+    <div class="m2-month-echart" data-m2-month-echart></div>
+  `;
+
+  const chartEl = container.querySelector("[data-m2-month-echart]");
+  const chart = echarts.init(chartEl);
+  const axis = ev.map((_, index) => {
+    const day = Math.floor(index / pointsPerDay) + 1;
+    const slot = index % pointsPerDay;
+    const hour = Math.floor(slot / 4);
+    const minute = (slot % 4) * 15;
+    return `D${day} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  });
+  const limitKw = Number(result.summary?.transformerLimitKw || 0);
+  const powerValues = [
+    ...(chartData.ev || []),
+    ...(chartData.pv || []),
+    ...(chartData.grid || [])
+  ].map((value) => Number(value || 0));
+  const curveMaxKw = Math.max(...powerValues, 1);
+  const showLimit = Number.isFinite(limitKw) && limitKw > 0 && limitKw <= curveMaxKw * 1.18;
+  const powerAxisMax = Math.ceil((Math.max(curveMaxKw, showLimit ? limitKw : 0) * 1.12) / 10) * 10;
+
+  chart.setOption({
+    textStyle: { fontFamily: 'Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif' },
+    animation: false,
+    color: ["#2454d6", "#008f9c", "#7c3aed", "#d97706"],
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross" },
+      backgroundColor: "rgba(255, 255, 255, 0.96)",
+      borderColor: "#E2E8F0",
+      padding: [10, 12],
+      textStyle: { color: "#1E293B", fontSize: 12 },
+      extraCssText: "box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12); border-radius: 8px;"
+    },
+    legend: {
+      top: 0,
+      left: 4,
+      icon: "roundRect",
+      itemWidth: 16,
+      itemHeight: 4,
+      itemGap: 14,
+      textStyle: { color: "#64748B", fontSize: 12 },
+      data: ["充电负荷", "光伏出力", "购电功率", "储能 SOC"]
+    },
+    grid: { left: 58, right: 58, top: 52, bottom: 58, containLabel: true },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, filterMode: "none", throttle: 60 },
+      {
+        type: "slider",
+        xAxisIndex: 0,
+        filterMode: "none",
+        bottom: 14,
+        height: 24,
+        borderColor: "rgba(15, 23, 42, 0.12)",
+        fillerColor: "rgba(0, 143, 156, 0.14)",
+        handleStyle: { color: "#008f9c" },
+        textStyle: { color: "#64748B" }
+      }
+    ],
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: axis,
+      axisLabel: { color: "#64748B", hideOverlap: true },
+      axisLine: { lineStyle: { color: "#CBD5E1" } },
+      axisTick: { show: false }
+    },
+    yAxis: [
+      {
+        type: "value",
+        name: "kW",
+        min: 0,
+        max: powerAxisMax,
+        nameTextStyle: { color: "#94A3B8" },
+        axisLabel: { color: "#64748B" },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: "#EEF2F7", type: "dashed" } }
+      },
+      {
+        type: "value",
+        name: "SOC",
+        min: 0,
+        max: 160,
+        nameTextStyle: { color: "#94A3B8" },
+        interval: 50,
+        axisLabel: {
+          color: "#64748B",
+          formatter: (value) => value <= 100 && value % 50 === 0 ? `${value}%` : ""
+        },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      {
+        name: "充电负荷",
+        type: "line",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2.2 },
+        areaStyle: { opacity: 0.10 },
+        data: chartData.ev || []
+      },
+      {
+        name: "光伏出力",
+        type: "line",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2 },
+        areaStyle: { opacity: 0.08 },
+        data: chartData.pv || []
+      },
+      {
+        name: "购电功率",
+        type: "line",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1.8 },
+        data: chartData.grid || []
+      },
+      {
+        name: "储能 SOC",
+        type: "line",
+        xAxisIndex: 0,
+        yAxisIndex: 1,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1.8, color: "#d97706", opacity: 0.82 },
+        data: chartData.soc || []
+      },
+      ...(showLimit ? [{
+        name: "变压器红线",
+        type: "line",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        showSymbol: false,
+        silent: true,
+        lineStyle: { width: 0 },
+        data: ev.map(() => limitKw),
+        markLine: {
+          symbol: "none",
+          label: { formatter: "变压器红线", color: "#b91c1c" },
+          lineStyle: { color: "#b91c1c", type: "dashed", width: 1.5 },
+          data: [{ yAxis: limitKw }]
+        }
+      }] : [])
+    ]
+  });
+
+  window.addEventListener("resize", () => chart.resize());
+}
+
+function aggregateAnnualSeries(values, bucketSize, mode = "max") {
+  const source = Array.isArray(values) ? values : [];
+  const result = [];
+  for (let start = 0; start < source.length; start += bucketSize) {
+    const slice = source.slice(start, start + bucketSize).map((value) => Number(value || 0));
+    if (!slice.length) continue;
+    if (mode === "avg") {
+      result.push(slice.reduce((sum, value) => sum + value, 0) / slice.length);
+    } else {
+      result.push(Math.max(...slice));
+    }
+  }
+  return result;
+}
+
+function buildM2AnnualReferenceSeries(m2Result, totalTicks, bucketSize) {
+  const m2Load = m2Result?.chartData?.ev || [];
+  if (!Array.isArray(m2Load) || !m2Load.length || !Number.isFinite(totalTicks) || totalTicks <= 0) {
+    return [];
+  }
+
+  const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const monthIndex = Number(m2Result?.summary?.monthIndex ?? m2Result?.sourceParams?.monthIndex ?? 0);
+  const safeMonthIndex = Math.max(0, Math.min(11, Number.isFinite(monthIndex) ? monthIndex : 0));
+  const monthStartTick = monthDays.slice(0, safeMonthIndex).reduce((sum, days) => sum + days * 96, 0);
+  const pointCount = Math.ceil(totalTicks / bucketSize);
+  const reference = Array(pointCount).fill(null);
+
+  m2Load.forEach((value, index) => {
+    const annualTick = monthStartTick + index;
+    if (annualTick < 0 || annualTick >= totalTicks) return;
+    const bucketIndex = Math.floor(annualTick / bucketSize);
+    const loadValue = Number(value || 0);
+    reference[bucketIndex] = reference[bucketIndex] == null
+      ? loadValue
+      : Math.max(reference[bucketIndex], loadValue);
+  });
+
+  return reference;
+}
+
+function renderM3AnnualStressEChart(container, annualResult, selectedRoute, m2Result = null) {
+  const chartData = annualResult?.rawAnnual?.chartData || annualResult?.chartData;
+  const demand = chartData?.demand || [];
+  if (!container || !chartData || !Array.isArray(demand) || demand.length === 0) {
+    resetInsightChart(container, "完成 M3-B 全年验证后展示全年压力测试曲线。");
+    return;
+  }
+
+  const previousChartEl = container.querySelector("[data-m3-annual-stress-echart]");
+  if (previousChartEl && typeof echarts !== "undefined") {
+    const previous = echarts.getInstanceByDom(previousChartEl);
+    if (previous) previous.dispose();
+  }
+
+  if (typeof echarts === "undefined") {
+    resetInsightChart(container, "ECharts 未加载，暂无法展示全年压力测试曲线。");
+    return;
+  }
+
+  const bucketSize = demand.length > 9000 ? 4 : 1;
+  const sampleLabel = bucketSize === 4 ? "小时峰值采样" : "15 分钟采样";
+  const dispatched = aggregateAnnualSeries(chartData.demand, bucketSize, "max");
+  const rawDemand = aggregateAnnualSeries(chartData.rawDemand, bucketSize, "max");
+  const pv = aggregateAnnualSeries(chartData.pv, bucketSize, "max");
+  const soc = aggregateAnnualSeries(chartData.soc, bucketSize, "avg");
+  const limit = aggregateAnnualSeries(chartData.limit, bucketSize, "max");
+  const m2Reference = buildM2AnnualReferenceSeries(m2Result, demand.length, bucketSize);
+  const hasM2Reference = m2Reference.some((value) => value != null);
+  const pointsPerDay = Math.max(1, Math.round(96 / bucketSize));
+  const axis = dispatched.map((_, index) => {
+    const day = Math.floor(index / pointsPerDay) + 1;
+    const slot = index % pointsPerDay;
+    const hour = bucketSize === 4 ? slot : Math.floor(slot / 4);
+    const minute = bucketSize === 4 ? 0 : (slot % 4) * 15;
+    return `D${day} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  });
+  const limitKw = Math.max(...limit.map((value) => Number(value || 0)), 0);
+  const powerValues = [...dispatched, ...rawDemand, ...pv, ...m2Reference]
+    .filter((value) => value != null)
+    .map((value) => Number(value || 0));
+  const curveMaxKw = Math.max(...powerValues, 1);
+  const showLimit = Number.isFinite(limitKw) && limitKw > 0 && limitKw <= curveMaxKw * 1.18;
+  const powerAxisMax = Math.ceil((Math.max(curveMaxKw, showLimit ? limitKw : 0) * 1.12) / 10) * 10;
+  const annualMonthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const m2MonthIndex = Number(m2Result?.summary?.monthIndex ?? m2Result?.sourceParams?.monthIndex ?? 0);
+  const safeM2MonthIndex = Math.max(0, Math.min(11, Number.isFinite(m2MonthIndex) ? m2MonthIndex : 0));
+  const initialStart = hasM2Reference
+    ? annualMonthDays.slice(0, safeM2MonthIndex).reduce((sum, days) => sum + days, 0) / 365 * 100
+    : 0;
+  const initialEnd = Math.min(100, initialStart + (annualMonthDays[safeM2MonthIndex] || 31) / 365 * 100);
+
+  container.innerHTML = `
+    <div class="worst-day-note">
+      <strong>${annualResult?.selectedRouteLabel || selectedRoute?.label || "所选路线"} 全年连续曲线</strong>
+      <span>${sampleLabel} · 原始压力 / ${hasM2Reference ? "M2 压力月负荷 / " : ""}调度后负荷 / 光伏出力 / 储能 SOC</span>
+    </div>
+    <div class="m3-annual-stress-echart" data-m3-annual-stress-echart></div>
+  `;
+
+  const chartEl = container.querySelector("[data-m3-annual-stress-echart]");
+  const chart = echarts.init(chartEl);
+  chart.setOption({
+    textStyle: { fontFamily: 'Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif' },
+    animation: false,
+    color: ["#475569", "#ef4444", "#2454d6", "#008f9c", "#d97706"],
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross" },
+      backgroundColor: "rgba(255, 255, 255, 0.96)",
+      borderColor: "#E2E8F0",
+      padding: [10, 12],
+      textStyle: { color: "#1E293B", fontSize: 12 },
+      extraCssText: "box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12); border-radius: 8px;"
+    },
+    legend: {
+      top: 0,
+      left: 4,
+      icon: "roundRect",
+      itemWidth: 16,
+      itemHeight: 4,
+      itemGap: 14,
+      textStyle: { color: "#64748B", fontSize: 12 },
+      data: hasM2Reference
+        ? ["原始压力", "M2 压力月负荷", "调度后负荷", "光伏出力", "储能 SOC"]
+        : ["原始压力", "调度后负荷", "光伏出力", "储能 SOC"]
+    },
+    grid: { left: 58, right: 58, top: 52, bottom: 58, containLabel: true },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, filterMode: "none", throttle: 60, start: initialStart, end: initialEnd },
+      {
+        type: "slider",
+        xAxisIndex: 0,
+        filterMode: "none",
+        bottom: 14,
+        height: 24,
+        start: initialStart,
+        end: initialEnd,
+        borderColor: "rgba(15, 23, 42, 0.12)",
+        fillerColor: "rgba(0, 143, 156, 0.14)",
+        handleStyle: { color: "#008f9c" },
+        textStyle: { color: "#64748B" }
+      }
+    ],
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: axis,
+      axisLabel: { color: "#64748B", hideOverlap: true },
+      axisLine: { lineStyle: { color: "#CBD5E1" } },
+      axisTick: { show: false }
+    },
+    yAxis: [
+      {
+        type: "value",
+        name: "kW",
+        min: 0,
+        max: powerAxisMax,
+        nameTextStyle: { color: "#94A3B8" },
+        axisLabel: { color: "#64748B" },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: "#EEF2F7", type: "dashed" } }
+      },
+      {
+        type: "value",
+        name: "SOC",
+        min: 0,
+        max: 160,
+        nameTextStyle: { color: "#94A3B8" },
+        interval: 50,
+        axisLabel: {
+          color: "#64748B",
+          formatter: (value) => value <= 100 && value % 50 === 0 ? `${value}%` : ""
+        },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      {
+        name: "原始压力",
+        type: "line",
+        yAxisIndex: 0,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1.4, color: "#94a3b8", type: "dashed" },
+        data: rawDemand
+      },
+      ...(hasM2Reference ? [{
+        name: "M2 压力月负荷",
+        type: "line",
+        yAxisIndex: 0,
+        smooth: true,
+        showSymbol: false,
+        connectNulls: false,
+        lineStyle: { width: 1.8, color: "#ef4444", type: "dashed", opacity: 0.9 },
+        data: m2Reference
+      }] : []),
+      {
+        name: "调度后负荷",
+        type: "line",
+        yAxisIndex: 0,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2.2 },
+        areaStyle: { opacity: 0.08 },
+        data: dispatched
+      },
+      {
+        name: "光伏出力",
+        type: "line",
+        yAxisIndex: 0,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1.8 },
+        areaStyle: { opacity: 0.06 },
+        data: pv
+      },
+      {
+        name: "储能 SOC",
+        type: "line",
+        yAxisIndex: 1,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1.8, color: "#d97706", opacity: 0.82 },
+        data: soc
+      },
+      ...(showLimit ? [{
+        name: "变压器红线",
+        type: "line",
+        yAxisIndex: 0,
+        showSymbol: false,
+        silent: true,
+        lineStyle: { width: 0 },
+        data: dispatched.map(() => limitKw),
+        markLine: {
+          symbol: "none",
+          label: { formatter: "变压器红线", color: "#b91c1c" },
+          lineStyle: { color: "#b91c1c", type: "dashed", width: 1.5 },
+          data: [{ yAxis: limitKw }]
+        }
+      }] : [])
+    ]
+  });
+
+  window.addEventListener("resize", () => chart.resize());
 }
 
 function renderCapexStackChart(container, economics) {
@@ -850,15 +1295,174 @@ function renderRawResults(state) {
   });
 }
 
+function renderM1CapexEChart(container, economics) {
+  if (!container || typeof echarts === "undefined") return;
+
+  const existing = echarts.getInstanceByDom(container);
+  if (existing) existing.dispose();
+
+  const chart = echarts.init(container);
+
+  chart.setOption({
+    textStyle: { fontFamily: 'Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif' },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: "rgba(255, 255, 255, 0.95)",
+      borderColor: "#E2E8F0",
+      padding: [12, 16],
+      textStyle: { color: "#1E293B" },
+      extraCssText: "box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); border-radius: 8px;"
+    },
+    legend: {
+      data: ["光伏", "储能", "PCS", "充电桩", "EMS"],
+      bottom: "0%",
+      icon: "circle",
+      itemGap: 20,
+      textStyle: { color: "#64748B", fontSize: 13 }
+    },
+    grid: {
+      top: "15%", left: "2%", right: "4%", bottom: "20%", containLabel: true,
+      show: false
+    },
+    xAxis: {
+      type: "value",
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: "#94A3B8" },
+      splitLine: { show: true, lineStyle: { color: "#F1F5F9", type: "dashed" } }
+    },
+    yAxis: {
+      type: "category",
+      data: ["投资构成"],
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { show: false }
+    },
+    series: [
+      { name: "光伏", type: "bar", stack: "total", barWidth: 32, itemStyle: { color: "#008f9c", borderRadius: [4, 0, 0, 4] }, data: [economics.pvCapexWan || 0] },
+      { name: "储能", type: "bar", stack: "total", itemStyle: { color: "#0f766e" }, data: [economics.storageEnergyCapexWan || 0] },
+      { name: "PCS", type: "bar", stack: "total", itemStyle: { color: "#2454d6" }, data: [economics.storagePowerCapexWan || 0] },
+      { name: "充电桩", type: "bar", stack: "total", itemStyle: { color: "#d97706" }, data: [economics.chargerCapexWan || 0] },
+      { name: "EMS", type: "bar", stack: "total", itemStyle: { color: "#94a3b8", borderRadius: [0, 4, 4, 0] }, data: [economics.emsCapexWan || 0] }
+    ]
+  });
+
+  window.addEventListener("resize", () => chart.resize());
+}
+
+function renderM1PowerEChart(container, chartData) {
+  if (!container || typeof echarts === "undefined" || !chartData) return;
+
+  const existing = echarts.getInstanceByDom(container);
+  if (existing) existing.dispose();
+
+  const chart = echarts.init(container);
+
+  const rawHours = Array.isArray(chartData.pv) ? chartData.pv.length : 96;
+  const hoursAxis = Array.from({ length: rawHours }, (_, i) => {
+    const hour = i % 24;
+    return hour === 0 ? `H${i}` : "";
+  });
+
+  chart.setOption({
+    textStyle: { fontFamily: 'Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif' },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: "rgba(255, 255, 255, 0.95)",
+      borderColor: "#E2E8F0",
+      padding: 12,
+      extraCssText: "box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); border-radius: 8px;"
+    },
+    legend: {
+      data: ["充电负荷", "光伏出力", "SOC (%)"],
+      top: "0%",
+      icon: "roundRect",
+      itemWidth: 16, itemHeight: 4,
+      textStyle: { color: "#64748B", fontSize: 13 }
+    },
+    grid: {
+      top: "18%", left: "2%", right: "2%", bottom: "8%", containLabel: true,
+      show: false
+    },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, filterMode: "none" }
+    ],
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: hoursAxis,
+      axisLine: { lineStyle: { color: "#CBD5E1" } },
+      axisTick: { show: false },
+      axisLabel: { color: "#64748B" }
+    },
+    yAxis: [
+      {
+        type: "value",
+        name: "功率 (kW)",
+        nameTextStyle: { color: "#94A3B8", padding: [0, 30, 0, 0] },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: "#64748B" },
+        splitLine: { show: true, lineStyle: { color: "#F1F5F9", type: "dashed" } }
+      },
+      {
+        type: "value",
+        name: "SOC (%)",
+        nameTextStyle: { color: "#94A3B8", padding: [0, 0, 0, 30] },
+        min: 0, max: 100,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: "#64748B" },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      {
+        name: "充电负荷", type: "line", yAxisIndex: 0,
+        smooth: true, showSymbol: false,
+        lineStyle: { color: "#2454d6", width: 2 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: "rgba(36, 84, 214, 0.25)" },
+            { offset: 1, color: "rgba(36, 84, 214, 0.02)" }
+          ])
+        },
+        data: chartData.ev || []
+      },
+      {
+        name: "光伏出力", type: "line", yAxisIndex: 0,
+        smooth: true, showSymbol: false,
+        lineStyle: { color: "#008f9c", width: 2 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: "rgba(0, 143, 156, 0.25)" },
+            { offset: 1, color: "rgba(0, 143, 156, 0.02)" }
+          ])
+        },
+        data: chartData.pv || []
+      },
+      {
+        name: "SOC (%)", type: "line", yAxisIndex: 1,
+        smooth: true, showSymbol: false,
+        lineStyle: { color: "#10B981", width: 2.5 },
+        data: chartData.soc || []
+      }
+    ]
+  });
+
+  window.addEventListener("resize", () => chart.resize());
+}
+
 function renderM1Summary(state) {
   const result = state.stages.m1.result;
   const el = dom.m1Summary;
 
   if (!result) {
-    el.title.textContent = "尚未运行真实规划。";
-    el.meta.textContent = "运行后，这里会显示城市、气候区与新能源目标。";
+    el.title.textContent = "系统基准规划方案尚未生成";
+    el.meta.textContent = "配置左侧 Table 参数后点击右上方按钮执行连续仿真计算。";
     resetInsightChart(el.capexChart, "运行 M1 后展示投资构成。");
-    resetInsightChart(el.powerChart, "运行 M1 后展示典型日功率曲线。");
+    resetInsightChart(el.powerChart, "运行 M1 后展示标准周功率模拟。");
     return;
   }
 
@@ -880,8 +1484,8 @@ function renderM1Summary(state) {
   el.curtailment.textContent = `${formatNumber(energyPerformance.curtailmentRatePct, 1)}%`;
   el.gridAnnual.textContent = `${formatNumber(energyPerformance.gridBuyAnnualKwh, 1)} kWh`;
 
-  renderCapexStackChart(el.capexChart, economics);
-  renderM1StandardWeekChart(el.powerChart, result.chartData);
+  renderM1CapexEChart(el.capexChart, economics);
+  renderM1PowerEChart(el.powerChart, result.chartData);
 }
 
 function renderM2Summary(state) {
@@ -928,7 +1532,7 @@ function renderM2Summary(state) {
   el.riskStorage.textContent = handoffToM3.hasStorageRisk ? "有" : "无";
   el.fixedP99.textContent = String(occupancyReference.fixedReadyP99);
 
-  renderM2MonthChart(el.powerChart, result);
+  renderM2MonthEChart(el.powerChart, result);
   renderM2RiskHeatmap(el.riskHeatmap, result);
 }
 
@@ -1091,6 +1695,8 @@ function renderM3Summary(state) {
     el.annualFocusMonths.textContent = "--";
     el.annualM4Focus.textContent = "--";
 
+    el.annualStressMeta.textContent = "完成所选路线全年验证后，这里将展示全年连续调度曲线，用于对照原始压力与调度后负荷。";
+    resetInsightChart(el.annualStressChart, "完成 M3-B 全年验证后展示全年压力测试曲线。");
     el.annualChartMeta.textContent = "完成所选路线全年验证后，这里将展示 12 个月风险分布。";
     resetAnnualChart(el.annualUnmetChart);
     resetAnnualChart(el.annualServiceChart);
@@ -1208,6 +1814,8 @@ function renderM3Summary(state) {
     el.annualFocusMonths.textContent = "--";
     el.annualM4Focus.textContent = "--";
 
+    el.annualStressMeta.textContent = "正在执行全年连续调度验证，曲线将在结果返回后生成。";
+    resetInsightChart(el.annualStressChart, "验证中");
     el.annualChartMeta.textContent = "正在执行全年验证，月度风险画像将在结果返回后生成。";
     resetAnnualChart(el.annualUnmetChart, "验证中");
     resetAnnualChart(el.annualServiceChart, "验证中");
@@ -1229,6 +1837,8 @@ function renderM3Summary(state) {
     el.annualFocusMonths.textContent = "--";
     el.annualM4Focus.textContent = "--";
 
+    el.annualStressMeta.textContent = "全年验证失败，暂无法生成全年压力测试曲线。";
+    resetInsightChart(el.annualStressChart, "验证失败");
     el.annualChartMeta.textContent = "全年验证失败，暂无法生成月度风险画像。";
     resetAnnualChart(el.annualUnmetChart, "验证失败");
     resetAnnualChart(el.annualServiceChart, "验证失败");
@@ -1250,6 +1860,8 @@ function renderM3Summary(state) {
     el.annualFocusMonths.textContent = "--";
     el.annualM4Focus.textContent = "--";
 
+    el.annualStressMeta.textContent = "等待全年验证结果返回后生成连续压力测试曲线。";
+    resetInsightChart(el.annualStressChart, "暂无数据");
     el.annualChartMeta.textContent = "全年验证结果返回后，这里将展示 12 个月风险分布。";
     resetAnnualChart(el.annualUnmetChart);
     resetAnnualChart(el.annualServiceChart);
@@ -1263,6 +1875,9 @@ function renderM3Summary(state) {
   el.annualService.textContent = `${formatPercent(annual.serviceRate || 0, 1)}%`;
   el.annualOverflowMonths.textContent = String(annual.monthsWithOverflow || 0);
   el.annualSocMonths.textContent = String(annual.monthsWithSocRisk || 0);
+  el.annualStressMeta.textContent =
+    `${annualResult.selectedRouteLabel || selectedRoute.label} 的全年压力测试曲线已生成，可直接对比 M2 压力月负荷、原始压力与调度后负荷。`;
+  renderM3AnnualStressEChart(el.annualStressChart, annualResult, selectedRoute, m2);
 
   // 绘制月度风险画像
   const monthly = annualResult.rawAnnual?.monthly || [];
@@ -1427,6 +2042,18 @@ function getM4ScenarioOptionLabel(scenario, recommendation) {
   const title = scenario.variantLabel || scenario.title || "候选方案";
 
   return `${scenario.id}｜${title}${recommendationMark}`;
+}
+
+function getM4ScenarioTitle(scenario) {
+  return (scenario?.variantLabel || scenario?.title || "候选方案").replace(/^S\d\s*/, "");
+}
+
+function getM4ScenarioBadges(scenario, recommendation) {
+  const badges = [];
+  if (scenario.id === recommendation?.recommendedScenarioId) badges.push("主推");
+  if (scenario.id === recommendation?.lowInvestmentScenarioId) badges.push("低投");
+  if (scenario.id === recommendation?.highProtectionScenarioId) badges.push("高保障");
+  return badges.map((badge) => `<em>${badge}</em>`).join("");
 }
 
 function renderM4ScenarioDeltaCards(el, scenario, routeKey) {
@@ -1737,8 +2364,8 @@ function renderM4Summary(state) {
   el.meta.textContent = `${summary.selectedRouteLabel || "--"} · 共评估 ${summary.scenarioCount || scenarios.length} 套方案` +
     (recommendation.feasibleCount != null ? ` · 硬可行 ${recommendation.feasibleCount} 套` : "");
   el.residualSeverity.textContent = `${diagnosis.severity || "--"} / ${formatNumber(diagnosis.severityScore || 0, 1)} · ${riskDiagnosisText(diagnosis)}`;
-  el.recommendMain.textContent = recommendation.isFallbackRecommendation
-    ? `${recommendation.recommendedScenarioId || "--"} (相对最优)`
+  el.recommendMain.textContent = recommended
+    ? `${recommended.id} · ${getM4ScenarioTitle(recommended)}${recommendation.isFallbackRecommendation ? " (相对最优)" : ""}`
     : recommendation.recommendedScenarioId || "--";
   el.recommendLow.textContent = recommendation.lowInvestmentScenarioId || "--";
   el.recommendSafe.textContent = recommendation.highProtectionScenarioId || "--";
@@ -1765,16 +2392,25 @@ function renderM4Summary(state) {
       ? formatNumber(scenario.recommendation.totalScore, 1)
       : "--";
     const mark = scenario.id === recommendation.recommendedScenarioId ? " ★" : "";
+    const rowClasses = [
+      scenario.id === recommendation.recommendedScenarioId ? "recommended-row" : "",
+      scenario.id === recommendation.lowInvestmentScenarioId ? "low-row" : "",
+      scenario.id === recommendation.highProtectionScenarioId ? "safe-row" : ""
+    ].filter(Boolean).join(" ");
     return `
-      <tr class="${scenario.id === recommendation.recommendedScenarioId ? "recommended-row" : ""}">
-        <td><strong>${scenario.id}${mark}</strong><small>${scenario.title.replace(/^S\d\s*/, "")}</small></td>
+      <tr class="${rowClasses}">
+        <td>
+          <strong>${scenario.id}${mark}</strong>
+          <small>${getM4ScenarioTitle(scenario)}</small>
+          <span class="scenario-badges">${getM4ScenarioBadges(scenario, recommendation)}</span>
+        </td>
         <td>${formatNumber(scenario.extraCapexWan || 0, 2)} 万</td>
         <td>${formatNumber(scenario.annualValidation?.totalUnmetKwh || 0, 1)} kWh</td>
         <td>${scenario.annualValidation?.totalOverflowCount || 0}</td>
         <td>${formatNumber((scenario.evaluationIndicators?.pvur || 0) * 100, 1)}%</td>
         <td>${formatNumber(scenario.evaluationIndicators?.gff || 0, 3)}</td>
         <td>${formatNumber(scenario.evaluationIndicators?.annualLcoeYuanPerKwh || 0, 3)}</td>
-        <td>${score}</td>
+        <td><span class="scenario-score">${score}</span></td>
       </tr>
     `;
   }).join("");

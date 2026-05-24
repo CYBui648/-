@@ -767,120 +767,27 @@ function runDispatchAssessment(payload) {
       params: { ...payload.params },
       economics: { ...payload.economics }
     };
+
     const traditional = runTraditionalPileDispatch({
       ...basePayload,
       params: {
         ...basePayload.params,
-        dispatchMode: 'traditional_pile',
+        dispatchMode: "traditional_pile",
         usePricing: true,
         useClipping: false,
         useV2G: false
       }
     });
-    // N_matrix should cover the pressure-month average daily access demand first,
-    // then use fixed-car concurrent demand as the lower-bound safety reference.
-    const m2Baseline = payload.baseline?.m2 || {};
-    const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    const pressureMonthDays = monthDays[payload.params?.monthIndex] || 30;
-    const fixedP95 = m2Baseline.fixedReadyP95 || Math.ceil((m2Baseline.virtualFastP95 || 0) + (m2Baseline.virtualSlowP95 || 0));
-    const fixedP99 = m2Baseline.fixedReadyP99 || Math.ceil((m2Baseline.virtualFastP99 || 0) + (m2Baseline.virtualSlowP99 || 0));
-    const fixedMax = m2Baseline.fixedReadyMax || Math.ceil((m2Baseline.chargingPeak || 0) + (m2Baseline.queuedPeak || 0));
-    const dailyAccessDemand = Number(m2Baseline.dailyAccessDemand) ||
-      (Number(m2Baseline.ledgerCount || m2Baseline.monthlyAccessDemand || 0) / pressureMonthDays);
-    const dailyAccessMatrix = Number(m2Baseline.recommendedMatrixByDailyAccess) || Math.ceil(dailyAccessDemand || 0);
-    const nMatrixP95 = Math.max(fixedP95, Math.ceil(dailyAccessMatrix * 0.8));
-    const nMatrixP99 = Math.max(fixedP99, dailyAccessMatrix);
-    const nMatrixMax = Math.max(fixedMax, dailyAccessMatrix);
-    const nMatrix = Math.max(nMatrixP99, basePayload.config.n7 + basePayload.config.n30);
 
-    // 第一次：柔性矩阵 sizing probe
-    // 不给 pMatrixKw 限制，让系统暴露原始柔性功率需求曲线。
-    // 这个 probe 只用于反推 P_matrix 推荐规模。
-    const flexiblePowerSizingProbe = runFlexibleMatrixDispatch({
-      ...basePayload,
-      params: {
-        ...basePayload.params,
-        dispatchMode: 'flex_matrix',
-        usePricing: true,
-        useClipping: true,
-        useV2G: basePayload.params.useV2G,
-        nMatrix,
-        nMatrixP95,
-        nMatrixP99,
-        nMatrixMax,
-        pMatrixKw: Number.POSITIVE_INFINITY
-      }
-    });
-
-    const flexibleRawDemand =
-      flexiblePowerSizingProbe.chartData?.rawDemand || [];
-
-    const pMatrixP95Kw = ceilTo(
-      percentile(flexibleRawDemand, 0.95),
-      25
-    );
-
-    const pMatrixP99Kw = ceilTo(
-      percentile(flexibleRawDemand, 0.99),
-      25
-    );
-
-    const pMatrixMaxKw = ceilTo(
-      flexibleRawDemand.length > 0
-        ? Math.max(...flexibleRawDemand)
-        : 0,
-      25
-    );
-
-    // M3-A 是路线评估，不是最终经济优化。
-    // 这里先用 P99 作为推荐功率池规模，避免把柔性路线因为功率池过早压小而评估偏弱。
-    // 真正的 P_matrix 优化放到后续 M4 多目标寻优。
-    const pMatrixRecommendedKw = pMatrixP99Kw;
-
-    // 第二次：正式柔性路线评估
-    // 使用推荐的 P_matrix 做压力月技术路线评估。
-    const flexible = runFlexibleMatrixDispatch({
-      ...basePayload,
-      params: {
-        ...basePayload.params,
-        dispatchMode: 'flex_matrix',
-        usePricing: true,
-        useClipping: true,
-        useV2G: basePayload.params.useV2G,
-        nMatrix,
-        nMatrixP95,
-        nMatrixP99,
-        nMatrixMax,
-        pMatrixKw: pMatrixRecommendedKw,
-        pMatrixP95Kw,
-        pMatrixP99Kw,
-        pMatrixMaxKw
-      }
-    });
-
-    traditional.residual = summarizeDispatchResidual(traditional, payload.baseline?.m2);
-    flexible.residual = summarizeDispatchResidual(flexible, payload.baseline?.m2);
-    const preferred = flexible.residual.needsHardwareReinforcement
-      ? (traditional.residual.needsHardwareReinforcement ? 'flex_matrix' : 'traditional_pile')
-      : 'flex_matrix';
-    return {
-      hardwareSource: 'm1_base',
+    traditional.residual = summarizeDispatchResidual(
       traditional,
-      flexible,
-      preferred,
+      payload.baseline?.m2
+    );
 
-      nMatrix,
-      nMatrixP95,
-      nMatrixP99,
-      nMatrixMax,
-      nMatrixDailyAccess: dailyAccessMatrix,
-      dailyAccessDemand,
-
-      pMatrixRecommendedKw,
-      pMatrixP95Kw,
-      pMatrixP99Kw,
-      pMatrixMaxKw,
-
+    return {
+      hardwareSource: "m1_base",
+      traditional,
+      preferred: "traditional_pile",
       baseline: payload.baseline || null
     };
   }
@@ -963,12 +870,12 @@ function normalizeM3Payload(context) {
       pvEfficiency: Number(m1Input.pvEfficiency ?? 0.72),
       valleySocTarget: 0.30,
       usePricing: true,
-      useClipping: true,
-      useV2G: Boolean(m3Input.useV2G ?? true),
+      useClipping: false,
+      useV2G: false,
       priceShiftThreshold: Number(m3Input.priceShiftThreshold ?? 0.55),
-      clipThreshold: Number(m3Input.clipThreshold ?? 0.90),
-      minClipSlackTicks: Number(m3Input.minClipSlackHours ?? 2) * 4,
-      maxV2gPerEv: Number(m3Input.maxV2gPerEvKwh ?? 8),
+      clipThreshold: 1,
+      minClipSlackTicks: 0,
+      maxV2gPerEv: 0,
       gridTouPrice: climate?.gridTouPrice,
       climate
     },
@@ -977,7 +884,7 @@ function normalizeM3Payload(context) {
       priceGridFlat: climate?.gridTouPrice?.flat ?? 0.65,
       priceGridPeak: climate?.gridTouPrice?.peak ?? 0.85,
       opexRate: Number(m3Input.opexRate ?? 0.015),
-      v2gWearCost: Number(m3Input.v2gWearCostYuanPerKwh ?? 0.15)
+      v2gWearCost: 0
     },
     baseline: {
       m2: baselineM2,
@@ -1042,25 +949,12 @@ function buildRouteHandoff(routeSummary) {
 
 function mapToM3Result(raw, payload, m2Result) {
   const traditionalSummary = summarizeRoute(raw.traditional);
-  const flexibleSummary = summarizeRoute(raw.flexible);
 
   return {
     contract: "M3Result",
     summary: {
-      title: "双路线调度评估已完成",
-      positioning:
-        "M3 并列展示传统桩站调度与柔性调度两条可落地路线，不自动替用户做技术路线选择。",
-
-      nMatrixP95: raw.nMatrixP95,
-      nMatrixP99: raw.nMatrixP99,
-      nMatrixMax: raw.nMatrixMax,
-      nMatrixDailyAccess: raw.nMatrixDailyAccess,
-      dailyAccessDemand: round(raw.dailyAccessDemand || 0, 1),
-
-      pMatrixRecommendedKw: round(raw.pMatrixRecommendedKw || 0, 1),
-      pMatrixP95Kw: round(raw.pMatrixP95Kw || 0, 1),
-      pMatrixP99Kw: round(raw.pMatrixP99Kw || 0, 1),
-      pMatrixMaxKw: round(raw.pMatrixMaxKw || 0, 1)
+      title: "价格调度评估已完成",
+      positioning: "M3 仅保留传统桩站价格调度路线，用分时价格引导弹性车辆错峰充电，评估软调度对压力风险的削减效果。"
     },
     baselineFromM2: {
       monthName: m2Result?.summary?.monthName || "--",
@@ -1072,42 +966,20 @@ function mapToM3Result(raw, payload, m2Result) {
     routeOptions: {
       traditional_pile: {
         key: "traditional_pile",
-        label: "传统桩站调度路线",
-        suitability: "适合已有固定桩位、改造条件有限、希望优先通过 EMS 优化运行的项目。",
+        label: "传统桩站价格调度",
+        suitability: "适合保留既有固定桩位，通过分时价格引导弹性车辆错峰充电，降低高峰负荷与排队风险。",
         result: traditionalSummary,
         handoffToM4: buildRouteHandoff(traditionalSummary)
-      },
-      flex_matrix: {
-        key: "flex_matrix",
-        label: "柔性调度路线",
-        suitability: "适合具备柔性配电、动态枪位接入或愿意采用矩阵化调度架构的项目。",
-        matrixSizing: {
-          // 接入端口规模
-          p95: raw.nMatrixP95,
-          p99: raw.nMatrixP99,
-          max: raw.nMatrixMax,
-          dailyAccess: raw.nMatrixDailyAccess,
-          dailyAccessDemand: round(raw.dailyAccessDemand || 0, 1),
-          recommended: raw.nMatrix,
-
-          // 共享功率池规模
-          powerP95Kw: round(raw.pMatrixP95Kw || 0, 1),
-          powerP99Kw: round(raw.pMatrixP99Kw || 0, 1),
-          powerMaxKw: round(raw.pMatrixMaxKw || 0, 1),
-          recommendedPowerKw: round(raw.pMatrixRecommendedKw || 0, 1)
-        },
-        result: flexibleSummary,
-        handoffToM4: buildRouteHandoff(flexibleSummary)
       }
     },
     raw,
     payloadSnapshot: {
       transformerLimitKw: payload.config.transformerLimit,
       monthIndex: payload.params.monthIndex,
-      useV2G: payload.params.useV2G,
+      usePricing: true,
+      useV2G: false,
       clipThreshold: payload.params.clipThreshold,
-      priceShiftThreshold: payload.params.priceShiftThreshold,
-      pMatrixRecommendedKw: round(raw.pMatrixRecommendedKw || 0, 1)
+      priceShiftThreshold: payload.params.priceShiftThreshold
     }
   };
 }
@@ -1120,78 +992,21 @@ export function runM3DispatchDiagnosis(context) {
 
 export function runM3SelectedRouteAnnualValidation(context) {
   const input = context.input || {};
-  const m3Input = input.m3 || {};
   const m3Result = context.previousResults?.m3;
 
-  const selectedRouteKey = m3Input.selectedRoute || null;
-  const selectedRoute = selectedRouteKey
-    ? m3Result?.routeOptions?.[selectedRouteKey]
-    : null;
-
-  if (!m3Result?.routeOptions) {
-    throw new Error("M3-B 缺少 M3-A 结果，无法执行所选路线全年验证。");
+  if (!m3Result?.routeOptions?.traditional_pile) {
+    throw new Error("M3-B 缺少 M3-A 价格调度结果，无法执行全年验证。");
   }
 
-  if (!selectedRouteKey || !selectedRoute) {
-    throw new Error("请先在 M3 中选择一条技术路线，再执行全年连续验证。");
-  }
+  const selectedRouteKey = "traditional_pile";
+  const selectedRoute = m3Result.routeOptions.traditional_pile;
 
   const payload = normalizeM3Payload(context);
 
-  // 按所选路线重置年度验证调度口径
-  payload.params.dispatchMode = selectedRouteKey;
-  payload.params.useClipping = selectedRouteKey === "flex_matrix";
-  payload.params.useV2G = selectedRouteKey === "flex_matrix"
-    ? Boolean(m3Input.useV2G ?? true)
-    : false;
-
-  // 柔性矩阵路线需要沿用 M3-A 算出的矩阵接口规模与功率池规模
-  if (selectedRouteKey === "flex_matrix") {
-    const matrixSizing = selectedRoute.matrixSizing || {};
-    const fallbackNMatrix = payload.config.n7 + payload.config.n30;
-
-    payload.params.nMatrix = Number(matrixSizing.recommended ?? fallbackNMatrix);
-    payload.params.nMatrixP95 = Number(matrixSizing.p95 ?? payload.params.nMatrix);
-    payload.params.nMatrixP99 = Number(matrixSizing.p99 ?? payload.params.nMatrix);
-    payload.params.nMatrixMax = Number(matrixSizing.max ?? payload.params.nMatrix);
-
-    const flexMatrixSizing =
-      m3Result?.routeOptions?.flex_matrix?.matrixSizing ?? {};
-
-    const pMatrixRecommendedKw =
-      flexMatrixSizing.recommendedPowerKw ??
-      m3Result?.summary?.pMatrixRecommendedKw ??
-      null;
-
-    const pMatrixP95Kw =
-      flexMatrixSizing.powerP95Kw ??
-      m3Result?.summary?.pMatrixP95Kw ??
-      null;
-
-    const pMatrixP99Kw =
-      flexMatrixSizing.powerP99Kw ??
-      m3Result?.summary?.pMatrixP99Kw ??
-      null;
-
-    const pMatrixMaxKw =
-      flexMatrixSizing.powerMaxKw ??
-      m3Result?.summary?.pMatrixMaxKw ??
-      null;
-
-    if (
-      !(Number.isFinite(pMatrixRecommendedKw) && pMatrixRecommendedKw > 0)
-    ) {
-      console.warn(
-        "[M3-B] flex_matrix selected but pMatrixRecommendedKw is invalid:",
-        pMatrixRecommendedKw
-      );
-    }
-
-    payload.params.pMatrixKw = pMatrixRecommendedKw;
-    payload.params.pMatrixP95Kw = pMatrixP95Kw;
-    payload.params.pMatrixP99Kw = pMatrixP99Kw;
-    payload.params.pMatrixMaxKw = pMatrixMaxKw;
-  }
+  payload.params.dispatchMode = "traditional_pile";
+  payload.params.usePricing = true;
+  payload.params.useClipping = false;
+  payload.params.useV2G = false;
 
   const annualResult = runAnnualValidation({
     preferred: selectedRouteKey,
@@ -1202,63 +1017,35 @@ export function runM3SelectedRouteAnnualValidation(context) {
 
   const annual = annualResult.annual || {};
 
-  // 为了在 M3-A 的 flex_matrix block 外部仍能使用 P_matrix 信息
-  // 构造返回值时，从已传参的 payload 中提取，而不是从局部作用域重新取。
-  const _pRec = payload.params.pMatrixKw ?? null;
-  const _pP95 = payload.params.pMatrixP95Kw ?? null;
-  const _pP99 = payload.params.pMatrixP99Kw ?? null;
-  const _pMax = payload.params.pMatrixMaxKw ?? null;
-
   return {
     contract: "M3AnnualValidationResult",
     selectedRouteKey,
     selectedRouteLabel: selectedRoute.label,
-
-    matrixConfig: selectedRouteKey === "flex_matrix"
-      ? {
-          nMatrix: payload.params.nMatrix,
-          nMatrixP95: payload.params.nMatrixP95,
-          nMatrixP99: payload.params.nMatrixP99,
-          nMatrixMax: payload.params.nMatrixMax,
-
-          pMatrixKw: _pRec,
-          pMatrixP95Kw: _pP95,
-          pMatrixP99Kw: _pP99,
-          pMatrixMaxKw: _pMax
-        }
-      : null,
-
+    matrixConfig: null,
     annualValidation: {
       totalUnmetKwh: round(annual.totalUnmet || 0, 1),
       totalQueueUnmetKwh: round(annual.totalQueueUnmet || 0, 1),
       totalOverflowCount: annual.totalOverflow || 0,
       serviceRate: round(annual.serviceRate || 0, 4),
 
-      // 柔性矩阵接口拥堵年度诊断
-      totalMatrixQueueTicks: annual.totalMatrixQueueTicks || 0,
-      totalMatrixQueueVehicleTicks: annual.totalMatrixQueueVehicleTicks || 0,
-      maxMatrixQueuePeak: annual.maxMatrixQueuePeak || 0,
-
-      // 柔性矩阵功率池拥堵年度诊断
-      totalPMatrixLimitedTicks: annual.totalPMatrixLimitedTicks || 0,
-      totalPMatrixLimitedEnergyKwh: round(annual.totalPMatrixLimitedEnergyKwh || 0, 1),
-      maxPMatrixGapKw: round(annual.maxPMatrixGapKw || 0, 1),
-      maxPMatrixRawPeakKw: round(annual.maxPMatrixRawPeakKw || 0, 1),
+      totalMatrixQueueTicks: 0,
+      totalMatrixQueueVehicleTicks: 0,
+      maxMatrixQueuePeak: 0,
+      totalPMatrixLimitedTicks: 0,
+      totalPMatrixLimitedEnergyKwh: 0,
+      maxPMatrixGapKw: 0,
+      maxPMatrixRawPeakKw: 0,
 
       monthsWithOverflow: annual.monthsWithOverflow || 0,
       monthsWithSocRisk: annual.monthsWithSocRisk || 0,
-
       totalDeliveredKwh: round(annual.totalDelivered || 0, 1),
       totalGridBuyKwh: round(annual.totalGridBuy || 0, 1),
-      totalV2gKwh: round(annual.totalV2g || 0, 1),
-
+      totalV2gKwh: 0,
       worstSocPct: round(annual.worstSoc ?? 100, 1),
       worstMonth: annual.worstMonth ?? null,
-
       annualGridCostYuan: round(annual.annualGridCost || 0, 1),
       annualLcoeYuanPerKwh: round(annual.annualLCOE || 999, 3)
     },
-
     rawAnnual: annualResult
   };
 }

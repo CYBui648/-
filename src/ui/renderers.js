@@ -1213,14 +1213,14 @@ function renderButtons(state) {
       button.textContent =
         key === "m1" ? "重新运行 M1 真实规划" :
         key === "m2" ? "重新运行 M2 压力测试" :
-        key === "m3" ? "重新运行 M3 双路线评估" :
+        key === "m3" ? "重新运行 M3 价格调度" :
         key === "m4" ? "重新运行 M4 最终方案定型" :
         `重新运行 ${key.toUpperCase()}`;
     } else {
       button.textContent =
         key === "m1" ? "运行 M1 真实规划" :
         key === "m2" ? "运行 M2 压力测试" :
-        key === "m3" ? "运行 M3 双路线评估" :
+        key === "m3" ? "运行 M3 价格调度" :
         key === "m4" ? "运行 M4 最终方案定型" :
         `运行 ${key.toUpperCase()}`;
     }
@@ -1561,8 +1561,8 @@ function getImprovementText(base, next, mode = "lower") {
 }
 
 function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
-  if (!container || !baseline || !traditional?.result || !flexible?.result) {
-    resetInsightChart(container, "运行 M3 后展示两条路线各自相对基准的改善效果。");
+  if (!container || !baseline || !traditional?.result) {
+    resetInsightChart(container, "运行 M3 后展示价格调度相对压力基线的改善效果。");
     return;
   }
 
@@ -1572,7 +1572,6 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
       unit: "kWh",
       baseline: Number(baseline.unmetTotalKwh || 0),
       traditional: Number(traditional.result.unmetTotalKwh || 0),
-      flexible: Number(flexible.result.unmetTotalKwh || 0),
       mode: "lower"
     },
     {
@@ -1580,7 +1579,6 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
       unit: "kWh",
       baseline: Number(baseline.queueUnmetKwh || 0),
       traditional: Number(traditional.result.queueUnmetKwh || 0),
-      flexible: Number(flexible.result.queueUnmetKwh || 0),
       mode: "lower"
     },
     {
@@ -1588,7 +1586,6 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
       unit: "kW",
       baseline: Number(baseline.realPeakKw || 0),
       traditional: Number(traditional.result.realPeakKw || 0),
-      flexible: Number(flexible.result.realPeakKw || 0),
       mode: "lower"
     },
     {
@@ -1596,7 +1593,6 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
       unit: "次",
       baseline: Number(baseline.overflowCount || 0),
       traditional: Number(traditional.result.overflowCount || 0),
-      flexible: Number(flexible.result.overflowCount || 0),
       mode: "lower"
     },
     {
@@ -1604,7 +1600,6 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
       unit: "%",
       baseline: Number(baseline.socMinPct || 0),
       traditional: Number(traditional.result.socMinPct || 0),
-      flexible: Number(flexible.result.socMinPct || 0),
       mode: "higher"
     }
   ];
@@ -1612,30 +1607,72 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
   const routeCards = [
     {
       key: "traditional",
-      title: "路线 A：传统桩站",
+      title: "传统桩站价格调度",
       badge: traditional.handoffToM4?.needsHardwareReinforcement ? "仍需 M4 加固" : "可直接承接",
       values: metrics.map((metric) => ({ ...metric, routeValue: metric.traditional }))
-    },
-    {
-      key: "flexible",
-      title: "路线 B：柔性调度",
-      badge: flexible.handoffToM4?.needsHardwareReinforcement ? "仍需 M4 加固" : "可直接承接",
-      values: metrics.map((metric) => ({ ...metric, routeValue: metric.flexible }))
     }
   ];
 
+  if (flexible?.result) {
+    const flexMetrics = [
+      {
+        label: "总缺口",
+        unit: "kWh",
+        baseline: Number(baseline.unmetTotalKwh || 0),
+        traditional: Number(flexible.result.unmetTotalKwh || 0),
+        mode: "lower"
+      },
+      {
+        label: "排队缺口",
+        unit: "kWh",
+        baseline: Number(baseline.queueUnmetKwh || 0),
+        traditional: Number(flexible.result.queueUnmetKwh || 0),
+        mode: "lower"
+      },
+      {
+        label: "峰值功率",
+        unit: "kW",
+        baseline: Number(baseline.realPeakKw || 0),
+        traditional: Number(flexible.result.realPeakKw || 0),
+        mode: "lower"
+      },
+      {
+        label: "越限次数",
+        unit: "次",
+        baseline: Number(baseline.overflowCount || 0),
+        traditional: Number(flexible.result.overflowCount || 0),
+        mode: "lower"
+      },
+      {
+        label: "最低 SOC",
+        unit: "%",
+        baseline: Number(baseline.socMinPct || 0),
+        traditional: Number(flexible.result.socMinPct || 0),
+        mode: "higher"
+      }
+    ];
+
+    routeCards.push({
+      key: "flexible",
+      title: "柔性调度（已移除）",
+      badge: "已移除",
+      values: flexMetrics.map((metric) => ({ ...metric, routeValue: metric.traditional }))
+    });
+  }
+
   container.innerHTML = routeCards.map((route) => {
     const rows = route.values.map((metric) => {
-      const maxValue = Math.max(metric.baseline, metric.routeValue, 1);
+      const metricValue = route.key === "flexible" ? metric.traditional : metric.routeValue;
+      const maxValue = Math.max(metric.baseline, metricValue, 1);
       const baselineWidth = Math.max(5, (metric.baseline / maxValue) * 100);
-      const routeWidth = Math.max(5, (metric.routeValue / maxValue) * 100);
-      const improvement = getImprovementText(metric.baseline, metric.routeValue, metric.mode);
+      const routeWidth = Math.max(5, (metricValue / maxValue) * 100);
+      const improvement = getImprovementText(metric.baseline, metricValue, metric.mode);
       const isBetter = metric.mode === "higher"
-        ? metric.routeValue > metric.baseline
-        : metric.routeValue < metric.baseline;
+        ? metricValue > metric.baseline
+        : metricValue < metric.baseline;
       const isWorse = metric.mode === "higher"
-        ? metric.routeValue < metric.baseline
-        : metric.routeValue > metric.baseline;
+        ? metricValue < metric.baseline
+        : metricValue > metric.baseline;
 
       return `
         <section class="baseline-lift-row ${isBetter ? "better" : ""} ${isWorse ? "worse" : ""}">
@@ -1657,7 +1694,7 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
             <div class="baseline-lift-track">
               <div class="baseline-lift-fill ${route.key}" style="width:${routeWidth}%"></div>
             </div>
-            <strong>${formatNumber(metric.routeValue, 1)} ${metric.unit}</strong>
+            <strong>${formatNumber(metricValue, 1)} ${metric.unit}</strong>
           </div>
         </section>
       `;
@@ -1722,63 +1759,61 @@ function renderM3Summary(state) {
 
   if (!result) {
     el.title.textContent = "M3 尚未运行。";
-    el.meta.textContent = m2 ? "M2 已完成，可以运行双路线评估。" : "M2 完成后，运行双路线评估。";
+    el.meta.textContent = m2 ? "M2 已完成，可以运行价格调度评估。" : "M2 完成后，运行价格调度评估。";
     el.tradPeak.textContent = "-- kW";
     el.tradUnmet.textContent = "-- kWh";
     el.tradQueue.textContent = "-- kWh";
     el.tradStatus.textContent = "--";
-    el.flexPeak.textContent = "-- kW";
-    el.flexUnmet.textContent = "-- kWh";
-    el.flexNMatrix.textContent = "--";
-    el.flexStatus.textContent = "--";
+    if (el.flexCard) el.flexCard.style.display = "none";
+    if (el.flexPeak) el.flexPeak.textContent = "-- kW";
+    if (el.flexUnmet) el.flexUnmet.textContent = "-- kWh";
+    if (el.flexNMatrix) el.flexNMatrix.textContent = "--";
+    if (el.flexStatus) el.flexStatus.textContent = "--";
     el.tradSelected.textContent = "未选择";
-    el.flexSelected.textContent = "未选择";
+    if (el.flexSelected) el.flexSelected.textContent = "已移除";
     el.selectedRoute.textContent = "尚未选择";
     el.selectedNeed.textContent = "--";
     el.selectedUnmet.textContent = "-- kWh";
     el.selectedOverflow.textContent = "-- 次";
     el.tradCard?.classList.remove("selected");
-    el.flexCard?.classList.remove("selected");
-    resetInsightChart(el.routeCompareChart, "运行 M3 后展示两条路线各自相对基准的改善效果。");
+    if (el.flexCard) el.flexCard.style.display = "none";
+    resetInsightChart(el.routeCompareChart, "运行 M3 后展示价格调度相对压力基线的改善效果。");
     resetAnnualSummary();
     return;
   }
 
   const traditional = result.routeOptions.traditional_pile;
-  const flexible = result.routeOptions.flex_matrix;
 
   renderM3BaselineLiftChart(
     el.routeCompareChart,
     m2?.riskReport,
     traditional,
-    flexible
+    null
   );
 
   const selectedRoute = selectedRouteKey ? result.routeOptions[selectedRouteKey] : null;
 
   el.title.textContent = result.summary.title;
   el.meta.textContent = selectedRoute
-    ? `已选择：${selectedRoute.label}。系统将先完成该路线全年连续验证，再进入 M4 工程方案定型。`
-    : "两条路线均已评估，请结合项目场地与实施条件选择进入 M3-B 全年验证。";
+    ? `已选择：${selectedRoute.label}。系统将完成全年连续验证，再进入 M4 工程方案定型。`
+    : "价格调度路线已生成，请选择传统桩站价格调度进入 M3-B 全年验证。";
 
   el.tradPeak.textContent = `${formatNumber(traditional.result.realPeakKw, 1)} kW`;
   el.tradUnmet.textContent = `${formatNumber(traditional.result.unmetTotalKwh, 1)} kWh`;
   el.tradQueue.textContent = `${formatNumber(traditional.result.queueUnmetKwh, 1)} kWh`;
   el.tradStatus.textContent = traditional.handoffToM4.needsHardwareReinforcement ? "需要" : "不需要";
 
-  el.flexPeak.textContent = `${formatNumber(flexible.result.realPeakKw, 1)} kW`;
-  el.flexUnmet.textContent = `${formatNumber(flexible.result.unmetTotalKwh, 1)} kWh`;
-  el.flexNMatrix.textContent = flexible.matrixSizing.dailyAccessDemand
-    ? `${flexible.matrixSizing.recommended}（日均 ${formatNumber(flexible.matrixSizing.dailyAccessDemand, 1)}）`
-    : String(flexible.matrixSizing.recommended);
-  el.flexStatus.textContent = flexible.handoffToM4.needsHardwareReinforcement ? "需要" : "不需要";
+  if (el.flexCard) el.flexCard.style.display = "none";
+  if (el.flexPeak) el.flexPeak.textContent = "-- kW";
+  if (el.flexUnmet) el.flexUnmet.textContent = "-- kWh";
+  if (el.flexNMatrix) el.flexNMatrix.textContent = "--";
+  if (el.flexStatus) el.flexStatus.textContent = "--";
+  if (el.flexSelected) el.flexSelected.textContent = "已移除";
 
   const tradSelected = selectedRouteKey === "traditional_pile";
-  const flexSelected = selectedRouteKey === "flex_matrix";
   el.tradSelected.textContent = tradSelected ? "已选择" : "未选择";
-  el.flexSelected.textContent = flexSelected ? "已选择" : "未选择";
   el.tradCard?.classList.toggle("selected", tradSelected);
-  el.flexCard?.classList.toggle("selected", flexSelected);
+  if (el.flexCard) el.flexCard.style.display = "none";
 
   if (!selectedRoute) {
     el.selectedRoute.textContent = "尚未选择";
@@ -2499,7 +2534,7 @@ function renderReportBoard(state) {
     el.actionNote.textContent = getM4FocusText(selectedAnnual);
   } else if (m3?.routeOptions) {
     el.headline.textContent = "调度路线已生成，先选择路线再做年度验证";
-    el.subtitle.textContent = "对比传统桩站与柔性调度后，选择更适合汇报口径的技术路线。";
+    el.subtitle.textContent = "完成价格调度评估后，选择传统桩站路线进入全年验证。";
     el.action.textContent = "选择 M3 路线";
     el.actionNote.textContent = "形成 M4 输入";
   } else if (m2?.riskReport) {

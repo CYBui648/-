@@ -3288,3 +3288,8 @@ button, pre { font: inherit; }
     text-align: left;
   }
 }
+
+#m3-route-flex-card,
+button[data-m3-route="flex_matrix"] {
+  display: none !important;
+}

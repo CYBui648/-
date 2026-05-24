@@ -401,10 +401,10 @@
   <div class="panel-head">
     <div>
       <span class="eyebrow">Stage M3</span>
-      <h3>技术路线并列评估</h3>
-      <p>先看两条路线各自会留下什么风险，再按项目条件选择一条进入 M4。M3 不替用户裁决，只把两条路算清楚。</p>
+      <h3>价格调度评估</h3>
+      <p>M3 仅保留传统桩站价格调度路线，用分时价格引导弹性车辆错峰充电，评估软调度对压力风险的削减效果。</p>
     </div>
-    <button class="primary-btn" id="run-m3" disabled>运行 M3 双路线评估</button>
+    <button class="primary-btn" id="run-m3" disabled>运行 M3 价格调度</button>
   </div>
 
   <section class="decision-hero">
@@ -430,7 +430,7 @@
       <div class="route-head">
         <div>
           <span class="route-kicker">路线 A</span>
-          <h4>传统桩站调度路线</h4>
+          <h4>传统桩站价格调度</h4>
         </div>
         <em id="m3-trad-selected">未选择</em>
       </div>
@@ -468,7 +468,7 @@
       <div>
         <h4>两条路线相对基准的改善效果</h4>
         <p class="helper-copy">
-          以 M1 基准方案在 M2 压力月中的风险暴露为参照，分别展示传统桩站路线和柔性调度路线能消除多少风险。
+          以 M1 基准方案在 M2 压力月中的风险暴露为参照，展示传统桩站价格调度能消除多少风险。
         </p>
       </div>
     </div>
@@ -599,7 +599,7 @@
           <input type="number" data-m3-input="v2gWearCostYuanPerKwh" min="0" max="1" step="0.01">
         </label>
       </div>
-      <p class="helper-copy">这些是两条路线共享的调度口径。默认折叠，是为了让 M3 页面先聚焦“选路线”，再看高级参数。</p>
+      <p class=”helper-copy”>这些是调度共享口径。默认折叠，是为了让 M3 页面先聚焦”选路线”，再看高级参数。</p>
     </div>
   </details>
 

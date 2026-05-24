@@ -1,6 +1,6 @@
 import { STAGES, STAGE_ORDER } from "../config/system-config.js";
 
-const M3_ROUTE_KEYS = new Set(["traditional_pile", "flex_matrix"]);
+const M3_ROUTE_KEYS = new Set(["traditional_pile"]);
 
 export class StageController {
   constructor({ state, workerClient, render }) {
@@ -112,7 +112,7 @@ export class StageController {
 
   unlockNextStage(stageKey) {
     // M3 是技术路线选择节点。
-    // M4 必须等用户明确选择“传统桩站”或“柔性调度”后再解锁。
+    // M4 必须等用户明确选择传统桩站价格调度路线后再解锁。
     if (stageKey === "m3") return;
 
     const currentIndex = STAGE_ORDER.indexOf(stageKey);

@@ -1560,7 +1560,7 @@ function getImprovementText(base, next, mode = "lower") {
   return next <= base ? "无新增风险" : `新增 ${formatNumber(next - base, 1)}`;
 }
 
-function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
+function renderM3BaselineLiftChart(container, baseline, traditional) {
   if (!container || !baseline || !traditional?.result) {
     resetInsightChart(container, "运行 M3 后展示价格调度相对压力基线的改善效果。");
     return;
@@ -1571,145 +1571,86 @@ function renderM3BaselineLiftChart(container, baseline, traditional, flexible) {
       label: "总缺口",
       unit: "kWh",
       baseline: Number(baseline.unmetTotalKwh || 0),
-      traditional: Number(traditional.result.unmetTotalKwh || 0),
+      routeValue: Number(traditional.result.unmetTotalKwh || 0),
       mode: "lower"
     },
     {
       label: "排队缺口",
       unit: "kWh",
       baseline: Number(baseline.queueUnmetKwh || 0),
-      traditional: Number(traditional.result.queueUnmetKwh || 0),
+      routeValue: Number(traditional.result.queueUnmetKwh || 0),
       mode: "lower"
     },
     {
       label: "峰值功率",
       unit: "kW",
       baseline: Number(baseline.realPeakKw || 0),
-      traditional: Number(traditional.result.realPeakKw || 0),
+      routeValue: Number(traditional.result.realPeakKw || 0),
       mode: "lower"
     },
     {
       label: "越限次数",
       unit: "次",
       baseline: Number(baseline.overflowCount || 0),
-      traditional: Number(traditional.result.overflowCount || 0),
+      routeValue: Number(traditional.result.overflowCount || 0),
       mode: "lower"
     },
     {
       label: "最低 SOC",
       unit: "%",
       baseline: Number(baseline.socMinPct || 0),
-      traditional: Number(traditional.result.socMinPct || 0),
+      routeValue: Number(traditional.result.socMinPct || 0),
       mode: "higher"
     }
   ];
 
-  const routeCards = [
-    {
-      key: "traditional",
-      title: "传统桩站价格调度",
-      badge: traditional.handoffToM4?.needsHardwareReinforcement ? "仍需 M4 加固" : "可直接承接",
-      values: metrics.map((metric) => ({ ...metric, routeValue: metric.traditional }))
-    }
-  ];
+  const badge = traditional.handoffToM4?.needsHardwareReinforcement ? "仍需 M4 加固" : "可直接承接";
 
-  if (flexible?.result) {
-    const flexMetrics = [
-      {
-        label: "总缺口",
-        unit: "kWh",
-        baseline: Number(baseline.unmetTotalKwh || 0),
-        traditional: Number(flexible.result.unmetTotalKwh || 0),
-        mode: "lower"
-      },
-      {
-        label: "排队缺口",
-        unit: "kWh",
-        baseline: Number(baseline.queueUnmetKwh || 0),
-        traditional: Number(flexible.result.queueUnmetKwh || 0),
-        mode: "lower"
-      },
-      {
-        label: "峰值功率",
-        unit: "kW",
-        baseline: Number(baseline.realPeakKw || 0),
-        traditional: Number(flexible.result.realPeakKw || 0),
-        mode: "lower"
-      },
-      {
-        label: "越限次数",
-        unit: "次",
-        baseline: Number(baseline.overflowCount || 0),
-        traditional: Number(flexible.result.overflowCount || 0),
-        mode: "lower"
-      },
-      {
-        label: "最低 SOC",
-        unit: "%",
-        baseline: Number(baseline.socMinPct || 0),
-        traditional: Number(flexible.result.socMinPct || 0),
-        mode: "higher"
-      }
-    ];
-
-    routeCards.push({
-      key: "flexible",
-      title: "柔性调度（已移除）",
-      badge: "已移除",
-      values: flexMetrics.map((metric) => ({ ...metric, routeValue: metric.traditional }))
-    });
-  }
-
-  container.innerHTML = routeCards.map((route) => {
-    const rows = route.values.map((metric) => {
-      const metricValue = route.key === "flexible" ? metric.traditional : metric.routeValue;
-      const maxValue = Math.max(metric.baseline, metricValue, 1);
-      const baselineWidth = Math.max(5, (metric.baseline / maxValue) * 100);
-      const routeWidth = Math.max(5, (metricValue / maxValue) * 100);
-      const improvement = getImprovementText(metric.baseline, metricValue, metric.mode);
-      const isBetter = metric.mode === "higher"
-        ? metricValue > metric.baseline
-        : metricValue < metric.baseline;
-      const isWorse = metric.mode === "higher"
-        ? metricValue < metric.baseline
-        : metricValue > metric.baseline;
-
-      return `
-        <section class="baseline-lift-row ${isBetter ? "better" : ""} ${isWorse ? "worse" : ""}">
-          <div class="baseline-lift-row-head">
-            <strong>${metric.label}</strong>
-            <em>${improvement}</em>
-          </div>
-
-          <div class="baseline-lift-bar-line">
-            <span>基准</span>
-            <div class="baseline-lift-track">
-              <div class="baseline-lift-fill base" style="width:${baselineWidth}%"></div>
-            </div>
-            <strong>${formatNumber(metric.baseline, 1)} ${metric.unit}</strong>
-          </div>
-
-          <div class="baseline-lift-bar-line">
-            <span>路线后</span>
-            <div class="baseline-lift-track">
-              <div class="baseline-lift-fill ${route.key}" style="width:${routeWidth}%"></div>
-            </div>
-            <strong>${formatNumber(metricValue, 1)} ${metric.unit}</strong>
-          </div>
-        </section>
-      `;
-    }).join("");
+  const rows = metrics.map((metric) => {
+    const maxValue = Math.max(metric.baseline, metric.routeValue, 1);
+    const baselineWidth = Math.max(5, (metric.baseline / maxValue) * 100);
+    const routeWidth = Math.max(5, (metric.routeValue / maxValue) * 100);
+    const improvement = getImprovementText(metric.baseline, metric.routeValue, metric.mode);
+    const isBetter = metric.mode === "higher"
+      ? metric.routeValue > metric.baseline
+      : metric.routeValue < metric.baseline;
+    const isWorse = metric.mode === "higher"
+      ? metric.routeValue < metric.baseline
+      : metric.routeValue > metric.baseline;
 
     return `
-      <section class="baseline-lift-route ${route.key}">
-        <div class="baseline-lift-route-head">
-          <h5>${route.title}</h5>
-          <span>${route.badge}</span>
+      <section class="baseline-lift-row ${isBetter ? "better" : ""} ${isWorse ? "worse" : ""}">
+        <div class="baseline-lift-row-head">
+          <strong>${metric.label}</strong>
+          <em>${improvement}</em>
         </div>
-        ${rows}
+        <div class="baseline-lift-bar-line">
+          <span>基准</span>
+          <div class="baseline-lift-track">
+            <div class="baseline-lift-fill base" style="width:${baselineWidth}%"></div>
+          </div>
+          <strong>${formatNumber(metric.baseline, 1)} ${metric.unit}</strong>
+        </div>
+        <div class="baseline-lift-bar-line">
+          <span>调度后</span>
+          <div class="baseline-lift-track">
+            <div class="baseline-lift-fill traditional" style="width:${routeWidth}%"></div>
+          </div>
+          <strong>${formatNumber(metric.routeValue, 1)} ${metric.unit}</strong>
+        </div>
       </section>
     `;
   }).join("");
+
+  container.innerHTML = `
+    <section class="baseline-lift-route traditional">
+      <div class="baseline-lift-route-head">
+        <h5>传统桩站价格调度</h5>
+        <span>${badge}</span>
+      </div>
+      ${rows}
+    </section>
+  `;
 }
 
 function renderM3Summary(state) {
@@ -1764,19 +1705,12 @@ function renderM3Summary(state) {
     el.tradUnmet.textContent = "-- kWh";
     el.tradQueue.textContent = "-- kWh";
     el.tradStatus.textContent = "--";
-    if (el.flexCard) el.flexCard.style.display = "none";
-    if (el.flexPeak) el.flexPeak.textContent = "-- kW";
-    if (el.flexUnmet) el.flexUnmet.textContent = "-- kWh";
-    if (el.flexNMatrix) el.flexNMatrix.textContent = "--";
-    if (el.flexStatus) el.flexStatus.textContent = "--";
     el.tradSelected.textContent = "未选择";
-    if (el.flexSelected) el.flexSelected.textContent = "已移除";
     el.selectedRoute.textContent = "尚未选择";
     el.selectedNeed.textContent = "--";
     el.selectedUnmet.textContent = "-- kWh";
     el.selectedOverflow.textContent = "-- 次";
     el.tradCard?.classList.remove("selected");
-    if (el.flexCard) el.flexCard.style.display = "none";
     resetInsightChart(el.routeCompareChart, "运行 M3 后展示价格调度相对压力基线的改善效果。");
     resetAnnualSummary();
     return;
@@ -1787,8 +1721,7 @@ function renderM3Summary(state) {
   renderM3BaselineLiftChart(
     el.routeCompareChart,
     m2?.riskReport,
-    traditional,
-    null
+    traditional
   );
 
   const selectedRoute = selectedRouteKey ? result.routeOptions[selectedRouteKey] : null;
@@ -1803,17 +1736,9 @@ function renderM3Summary(state) {
   el.tradQueue.textContent = `${formatNumber(traditional.result.queueUnmetKwh, 1)} kWh`;
   el.tradStatus.textContent = traditional.handoffToM4.needsHardwareReinforcement ? "需要" : "不需要";
 
-  if (el.flexCard) el.flexCard.style.display = "none";
-  if (el.flexPeak) el.flexPeak.textContent = "-- kW";
-  if (el.flexUnmet) el.flexUnmet.textContent = "-- kWh";
-  if (el.flexNMatrix) el.flexNMatrix.textContent = "--";
-  if (el.flexStatus) el.flexStatus.textContent = "--";
-  if (el.flexSelected) el.flexSelected.textContent = "已移除";
-
   const tradSelected = selectedRouteKey === "traditional_pile";
   el.tradSelected.textContent = tradSelected ? "已选择" : "未选择";
   el.tradCard?.classList.toggle("selected", tradSelected);
-  if (el.flexCard) el.flexCard.style.display = "none";
 
   if (!selectedRoute) {
     el.selectedRoute.textContent = "尚未选择";
@@ -1996,14 +1921,12 @@ function riskDiagnosisText(diagnosis) {
   const parts = [];
   const power = diagnosis.powerRisk || {};
   const energy = diagnosis.energyRisk || {};
-  const service = diagnosis.serviceRisk || {};
   const delivery = diagnosis.deliveryServiceRisk || {};
   const storage = diagnosis.storageRisk || {};
 
   if (power.active) parts.push(`功率:${riskLabel(power)}`);
   if (energy.active) parts.push(`能量:${riskLabel(energy)}`);
-  if (service.active) parts.push(`接入:${riskLabel(service)}`);
-  if (delivery.active) parts.push(`供电:${riskLabel(delivery)}`);
+  if (delivery.active) parts.push(`服务:${riskLabel(delivery)}`);
   if (storage.active) parts.push(`储能:${riskLabel(storage)}`);
 
   if (!parts.length) return "无显著残余风险";
@@ -2091,7 +2014,7 @@ function getM4ScenarioBadges(scenario, recommendation) {
   return badges.map((badge) => `<em>${badge}</em>`).join("");
 }
 
-function renderM4ScenarioDeltaCards(el, scenario, routeKey) {
+function renderM4ScenarioDeltaCards(el, scenario) {
   if (!scenario) {
     el.deltaPv.textContent = "-- kW";
     el.deltaStorage.textContent = "-- kWh";
@@ -2116,26 +2039,7 @@ function renderM4ScenarioDeltaCards(el, scenario, routeKey) {
     `${formatNumber(d.deltaTransformerKw || 0, 1)} kW`;
 
   el.deltaService.textContent =
-    routeKey === "traditional_pile"
-      ? `7kW +${d.deltaN7 || 0} / 30kW +${d.deltaN30 || 0}`
-      : (() => {
-          const deltaMatrix = d.deltaMatrix || 0;
-          const deltaPMatrixKw = d.deltaPMatrixKw || 0;
-
-          const parts = [];
-
-          if (deltaMatrix > 0) {
-            parts.push(`N_matrix +${deltaMatrix}`);
-          }
-
-          if (deltaPMatrixKw > 0) {
-            parts.push(`P_matrix +${deltaPMatrixKw} kW`);
-          }
-
-          return parts.length > 0
-            ? parts.join(" / ")
-            : "N_matrix +0 / P_matrix +0 kW";
-        })();
+    `7kW +${d.deltaN7 || 0} / 30kW +${d.deltaN30 || 0}`;
 }
 
 function renderM4InvestmentEffectChart(container, scenarios, recommendation) {
@@ -2382,7 +2286,7 @@ function renderM4Summary(state) {
       el.scenarioSelect.onchange = null;
     }
 
-    renderM4ScenarioDeltaCards(el, null, selectedRouteKey);
+    renderM4ScenarioDeltaCards(el, null);
     resetInsightChart(el.investmentEffectChart, "运行 M4 后展示方案投资与改善关系。");
     resetInsightChart(el.baselineCompareChart, "运行 M4 后展示主推荐方案相对基准的改进。");
 
@@ -2487,8 +2391,7 @@ function renderM4Summary(state) {
 
       renderM4ScenarioDeltaCards(
         el,
-        scenario,
-        summary.selectedRouteKey
+        scenario
       );
     };
   }
@@ -2501,8 +2404,7 @@ function renderM4Summary(state) {
 
   renderM4ScenarioDeltaCards(
     el,
-    selectedScenario,
-    summary.selectedRouteKey
+    selectedScenario
   );
 }
 

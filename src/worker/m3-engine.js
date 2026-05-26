@@ -612,8 +612,6 @@ function mapToM3Result(raw, payload, m2Result) {
       transformerLimitKw: payload.config.transformerLimit,
       monthIndex: payload.params.monthIndex,
       usePricing: true,
-      useV2G: false,
-      clipThreshold: payload.params.clipThreshold,
       priceShiftThreshold: payload.params.priceShiftThreshold
     }
   };
@@ -626,7 +624,6 @@ export function runM3DispatchDiagnosis(context) {
 }
 
 export function runM3SelectedRouteAnnualValidation(context) {
-  const input = context.input || {};
   const m3Result = context.previousResults?.m3;
 
   if (!m3Result?.routeOptions?.traditional_pile) {
@@ -656,7 +653,6 @@ export function runM3SelectedRouteAnnualValidation(context) {
     contract: "M3AnnualValidationResult",
     selectedRouteKey,
     selectedRouteLabel: selectedRoute.label,
-    matrixConfig: null,
     annualValidation: {
       totalUnmetKwh: round(annual.totalUnmet || 0, 1),
       totalQueueUnmetKwh: round(annual.totalQueueUnmet || 0, 1),

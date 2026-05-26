@@ -1,5 +1,4 @@
 import {
-  runFlexibleMatrixDispatch,
   runTraditionalPileDispatch,
   runAnnualValidation
 } from "./m4-dispatch-core.js";
@@ -75,18 +74,12 @@ function calcExtraCapexWan(base, scenario) {
   const cost30kw = safeNumber(input.cost30kw, 2.50);
   const transformerUpgradeCostWanPerKw =
     safeNumber(input.transformerUpgradeCostWanPerKw, 0);
-  const matrixPowerUpgradeCostWanPerKw =
-    safeNumber(input.matrixPowerUpgradeCostWanPerKw, 0.02);
 
   const finalStorage = base.config.E_storage + safeNumber(d.deltaStorageKwh, 0);
   const pvYuan = safeNumber(d.deltaPvKw, 0) * 1000 * pvPrice * (1 + pvRate / 100);
   const essYuan = safeNumber(d.deltaStorageKwh, 0) * 1000 * calcStorageUnitPrice(finalStorage, storBasePrice) * (1 + storRate / 100);
   const pcsYuan = safeNumber(d.deltaPcsKw, 0) * 450 * (1 + storRate / 100);
   const chargersWan = safeNumber(d.deltaN7, 0) * cost7kw + safeNumber(d.deltaN30, 0) * cost30kw;
-  const matrixWan = safeNumber(d.deltaMatrix, 0) * 0.08;
-  const matrixPowerWan =
-    safeNumber(d.deltaPMatrixKw, 0) *
-    matrixPowerUpgradeCostWanPerKw;
   const transformerWan =
     safeNumber(d.deltaTransformerKw, 0) *
     transformerUpgradeCostWanPerKw;
@@ -94,8 +87,6 @@ function calcExtraCapexWan(base, scenario) {
   return round(
     (pvYuan + essYuan + pcsYuan) / 10000 +
     chargersWan +
-    matrixWan +
-    matrixPowerWan +
     transformerWan,
     2
   );
@@ -118,61 +109,22 @@ function materializeScenarioPayload(base, scenario, extraCapexWan) {
 
   const params = {
     ...base.params,
-    dispatchMode: base.selectedRouteKey
+    dispatchMode: "traditional_pile",
+    usePricing: true,
+    useClipping: false,
+    useV2G: false
   };
-
-  if (base.selectedRouteKey === "flex_matrix") {
-    params.nMatrix = safeNumber(base.params.nMatrix, config.n7 + config.n30) + safeNumber(d.deltaMatrix, 0);
-    params.nMatrixP95 = Math.max(safeNumber(base.params.nMatrixP95, params.nMatrix), params.nMatrix);
-    params.nMatrixP99 = Math.max(safeNumber(base.params.nMatrixP99, params.nMatrix), params.nMatrix);
-    params.nMatrixMax = Math.max(safeNumber(base.params.nMatrixMax, params.nMatrix), params.nMatrix);
-
-    // R4-I：P_matrix 纳入 M4 柔性矩阵服务侧优化变量
-    const basePMatrixKw = safeNumber(base.params.pMatrixKw, 0);
-    const deltaPMatrixKw = safeNumber(d.deltaPMatrixKw, 0);
-
-    params.pMatrixKw =
-      basePMatrixKw > 0 || deltaPMatrixKw > 0
-        ? basePMatrixKw + deltaPMatrixKw
-        : null;
-
-    params.pMatrixP95Kw =
-      params.pMatrixKw == null
-        ? base.params.pMatrixP95Kw ?? null
-        : Math.max(
-            safeNumber(base.params.pMatrixP95Kw, params.pMatrixKw),
-            params.pMatrixKw
-          );
-
-    params.pMatrixP99Kw =
-      params.pMatrixKw == null
-        ? base.params.pMatrixP99Kw ?? null
-        : Math.max(
-            safeNumber(base.params.pMatrixP99Kw, params.pMatrixKw),
-            params.pMatrixKw
-          );
-
-    params.pMatrixMaxKw =
-      params.pMatrixKw == null
-        ? base.params.pMatrixMaxKw ?? null
-        : Math.max(
-            safeNumber(base.params.pMatrixMaxKw, params.pMatrixKw),
-            params.pMatrixKw
-          );
-  }
 
   return {
     config,
     params,
     economics: { ...base.economics },
-    preferred: base.selectedRouteKey
+    preferred: "traditional_pile"
   };
 }
 
-function runStressMonth(payload, routeKey) {
-  return routeKey === "flex_matrix"
-    ? runFlexibleMatrixDispatch(payload)
-    : runTraditionalPileDispatch(payload);
+function runStressMonth(payload) {
+  return runTraditionalPileDispatch(payload);
 }
 
 function calcPVUR(annual) {
@@ -197,7 +149,7 @@ function calcGFF(annual) {
 function evaluateScenario(base, scenario) {
   const extraCapexWan = calcExtraCapexWan(base, scenario);
   const payload = materializeScenarioPayload(base, scenario, extraCapexWan);
-  const monthResult = runStressMonth(payload, base.selectedRouteKey);
+  const monthResult = runStressMonth(payload);
   const annualValidation = runAnnualValidation(payload);
   const annual = annualValidation.annual || {};
 
@@ -210,9 +162,7 @@ function evaluateScenario(base, scenario) {
       pcsKw: round(payload.config.P_storage, 1),
       transformerLimitKw: round(payload.config.transformerLimit, 1),
       n7kw: payload.config.n7,
-      n30kw: payload.config.n30,
-      nMatrix: base.selectedRouteKey === "flex_matrix" ? safeNumber(payload.params.nMatrix, 0) : null,
-      pMatrixKw: base.selectedRouteKey === "flex_matrix" ? safeNumber(payload.params.pMatrixKw, 0) || null : null
+      n30kw: payload.config.n30
     },
     stressMonth: {
       realPeakKw: round(monthResult.realPeak || 0, 1),
@@ -220,31 +170,13 @@ function evaluateScenario(base, scenario) {
       unmetTotalKwh: round(monthResult.unmetTotal || 0, 1),
       queueUnmetKwh: round(monthResult.queueUnmet || 0, 1),
       socMinPct: round(monthResult.socMin || 100, 1),
-      abandonedCount: monthResult.abandonedCount || 0,
-
-      matrixQueuePeak: monthResult.matrixQueuePeak || 0,
-      matrixQueueTicks: monthResult.matrixQueueTicks || 0,
-      matrixQueueVehicleTicks: monthResult.matrixQueueVehicleTicks || 0,
-
-      pMatrixLimitedTicks: monthResult.pMatrixLimitedTicks || 0,
-      pMatrixLimitedEnergyKwh: round(monthResult.pMatrixLimitedEnergyKwh || 0, 1),
-      pMatrixMaxGapKw: round(monthResult.pMatrixMaxGapKw || 0, 1),
-      pMatrixRawPeakKw: round(monthResult.pMatrixRawPeakKw || 0, 1)
+      abandonedCount: monthResult.abandonedCount || 0
     },
     annualValidation: {
       totalUnmetKwh: round(annual.totalUnmet || 0, 1),
       totalQueueUnmetKwh: round(annual.totalQueueUnmet || 0, 1),
       totalOverflowCount: annual.totalOverflow || 0,
       serviceRate: round(annual.serviceRate || 0, 4),
-
-      totalMatrixQueueTicks: annual.totalMatrixQueueTicks || 0,
-      totalMatrixQueueVehicleTicks: annual.totalMatrixQueueVehicleTicks || 0,
-      maxMatrixQueuePeak: annual.maxMatrixQueuePeak || 0,
-
-      totalPMatrixLimitedTicks: annual.totalPMatrixLimitedTicks || 0,
-      totalPMatrixLimitedEnergyKwh: round(annual.totalPMatrixLimitedEnergyKwh || 0, 1),
-      maxPMatrixGapKw: round(annual.maxPMatrixGapKw || 0, 1),
-      maxPMatrixRawPeakKw: round(annual.maxPMatrixRawPeakKw || 0, 1),
       monthsWithOverflow: annual.monthsWithOverflow || 0,
       monthsWithSocRisk: annual.monthsWithSocRisk || 0,
       totalDeliveredKwh: round(annual.totalDelivered || 0, 1),
@@ -310,33 +242,6 @@ function buildImprovementVsBaseline(scenario, baseline) {
       serviceRateGain: calcGainAbs(
         sAnnual.serviceRate,
         bAnnual.serviceRate
-      ),
-
-      matrixQueueTicksReduction: calcReductionAbs(
-        bAnnual.totalMatrixQueueTicks,
-        sAnnual.totalMatrixQueueTicks
-      ),
-      matrixQueueTicksReductionRate: calcReductionRate(
-        bAnnual.totalMatrixQueueTicks,
-        sAnnual.totalMatrixQueueTicks
-      ),
-
-      matrixQueueVehicleTicksReduction: calcReductionAbs(
-        bAnnual.totalMatrixQueueVehicleTicks,
-        sAnnual.totalMatrixQueueVehicleTicks
-      ),
-      matrixQueueVehicleTicksReductionRate: calcReductionRate(
-        bAnnual.totalMatrixQueueVehicleTicks,
-        sAnnual.totalMatrixQueueVehicleTicks
-      ),
-
-      pMatrixLimitedEnergyReductionKwh: calcReductionAbs(
-        bAnnual.totalPMatrixLimitedEnergyKwh,
-        sAnnual.totalPMatrixLimitedEnergyKwh
-      ),
-      pMatrixLimitedEnergyReductionRate: calcReductionRate(
-        bAnnual.totalPMatrixLimitedEnergyKwh,
-        sAnnual.totalPMatrixLimitedEnergyKwh
       )
     },
 
@@ -359,21 +264,6 @@ function buildImprovementVsBaseline(scenario, baseline) {
       socMinPctGain: calcGainAbs(
         sStress.socMinPct,
         bStress.socMinPct
-      ),
-
-      matrixQueueTicksReduction: calcReductionAbs(
-        bStress.matrixQueueTicks,
-        sStress.matrixQueueTicks
-      ),
-
-      matrixQueueVehicleTicksReduction: calcReductionAbs(
-        bStress.matrixQueueVehicleTicks,
-        sStress.matrixQueueVehicleTicks
-      ),
-
-      pMatrixLimitedEnergyReductionKwh: calcReductionAbs(
-        bStress.pMatrixLimitedEnergyKwh,
-        sStress.pMatrixLimitedEnergyKwh
       )
     }
   };
@@ -458,42 +348,22 @@ function buildFamilyEffectiveness(scenario, improvement, routeKey) {
   }
 
   if (family === "S3") {
-    const rate =
-      routeKey === "traditional_pile"
-        ? annual.queueUnmetReductionRate
-        : (() => {
-            const queueRate =
-              annual.matrixQueueVehicleTicksReductionRate;
-
-            const powerPoolRate =
-              annual.pMatrixLimitedEnergyReductionRate;
-
-            if (queueRate == null && powerPoolRate == null) return null;
-
-            return Math.max(queueRate ?? 0, powerPoolRate ?? 0);
-          })();
-
+    const rate = annual.queueUnmetReductionRate;
     const level = classifyImprovement(rate);
 
     return {
       family,
-      primaryMetricKey:
-        routeKey === "traditional_pile"
-          ? "annualQueueUnmetReductionRate"
-          : "max(annualMatrixQueueVehicleTicksReductionRate, annualPMatrixLimitedEnergyReductionRate)",
-      primaryMetricLabel:
-        routeKey === "traditional_pile"
-          ? "全年排队损失下降率"
-          : "全年矩阵接口排队车时 / P_matrix 受限能量改善率",
+      primaryMetricKey: "annualQueueUnmetReductionRate",
+      primaryMetricLabel: "全年排队损失下降率",
       primaryReductionRate: rate,
       level,
       isMeaningful: isMeaningfulImprovement(level),
       note:
         level === "strong"
-          ? "该服务侧候选对全年接入服务风险形成显著改善。"
+          ? "该服务侧候选对全年排队与服务能力风险形成显著改善。"
           : level === "moderate"
-            ? "该服务侧候选对全年接入服务风险形成中等改善。"
-            : "该服务侧候选对全年接入服务风险的改善仍较有限。"
+            ? "该服务侧候选对全年排队与服务能力风险形成中等改善。"
+            : "该服务侧候选对全年排队与服务能力风险的改善仍较有限。"
     };
   }
 
@@ -516,19 +386,7 @@ function buildFamilyEffectiveness(scenario, improvement, routeKey) {
       }
 
       if (componentFamily === "S3") {
-        if (routeKey === "traditional_pile") {
-          return annual.queueUnmetReductionRate;
-        }
-
-        const queueRate =
-          annual.matrixQueueVehicleTicksReductionRate;
-
-        const powerPoolRate =
-          annual.pMatrixLimitedEnergyReductionRate;
-
-        if (queueRate == null && powerPoolRate == null) return null;
-
-        return Math.max(queueRate ?? 0, powerPoolRate ?? 0);
+        return annual.queueUnmetReductionRate;
       }
 
       return null;

@@ -539,6 +539,7 @@ export function runM4FinalPlanner(context) {
       scenarioCount: scored.length,
       evaluationNote: "本版已接入方案族候选生成、压力月复验、全年复验、相对 S0 的专项改善诊断、基于有效专项候选的 S4 综合方案生成与综合评分。PVUR 与 GFF 已作为年度方案评价指标纳入推荐逻辑。"
     },
+    weatherContext: base.weatherContext || null,
     residualDiagnosis: diagnosis,
     scenarios: scored,
     recommendation,

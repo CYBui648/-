@@ -533,6 +533,26 @@ function normalizeM3Payload(context) {
       opexRate: Number(m3Input.opexRate ?? 0.015),
       v2gWearCost: 0
     },
+    weatherContext: {
+      m1WeatherSummary: m1?.weatherSummary || null,
+      m2WeatherSummary: m2?.weatherSummary || null,
+      source: m2?.weatherSummary?.source || "tmy_8760_raw",
+      monthIndex,
+      monthName:
+        m2?.weatherSummary?.selectedMonthName ||
+        m2?.summary?.monthName ||
+        `${monthIndex + 1}月`,
+      selectedMonthMethod:
+        m2?.weatherSummary?.selectedMonthMethod ||
+        (m2?.weatherSummary?.isAutoSelectedMonth ? "daily_hps_min" : "manual"),
+      selectedMonthDailyHPS:
+        m2?.weatherSummary?.selectedMonthDailyHPS ?? null,
+      selectedMonthTotalHPS:
+        m2?.weatherSummary?.selectedMonthTotalHPS ?? null,
+      gTiltDataLength: Array.isArray(m2Input.gTiltData)
+        ? m2Input.gTiltData.length
+        : 0
+    },
     baseline: {
       m2: baselineM2,
       hardwareSource: "m1_base"
@@ -598,6 +618,7 @@ function mapToM3Result(raw, payload, m2Result) {
       queueUnmetKwh: round(m2Result?.riskReport?.queueUnmetKwh || 0, 1),
       abandonedCount: m2Result?.riskReport?.abandonedCount || 0
     },
+    weatherContext: payload.weatherContext || null,
     routeOptions: {
       traditional_pile: {
         key: "traditional_pile",
@@ -653,6 +674,10 @@ export function runM3SelectedRouteAnnualValidation(context) {
     contract: "M3AnnualValidationResult",
     selectedRouteKey,
     selectedRouteLabel: selectedRoute.label,
+    weatherContext: {
+      ...(payload.weatherContext || {}),
+      validationMode: "annual_8760_raw"
+    },
     annualValidation: {
       totalUnmetKwh: round(annual.totalUnmet || 0, 1),
       totalQueueUnmetKwh: round(annual.totalQueueUnmet || 0, 1),

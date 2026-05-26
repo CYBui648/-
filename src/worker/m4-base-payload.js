@@ -104,13 +104,48 @@ export function buildBasePayload(context) {
     v2gWearCost: 0
   };
 
+  const weatherContext = {
+    m1WeatherSummary: m1?.weatherSummary || null,
+    m2WeatherSummary: m2?.weatherSummary || null,
+    m3WeatherContext: m3?.weatherContext || null,
+    m3AnnualWeatherContext:
+      m3?.selectedAnnualValidation?.weatherContext || null,
+
+    source: m2?.weatherSummary?.source || "tmy_8760_raw",
+    monthIndex,
+    monthName:
+      m2?.weatherSummary?.selectedMonthName ||
+      m2?.summary?.monthName ||
+      `${monthIndex + 1}月`,
+
+    selectedMonthMethod:
+      m2?.weatherSummary?.selectedMonthMethod ||
+      (m2?.weatherSummary?.isAutoSelectedMonth ? "daily_hps_min" : "manual"),
+
+    selectedMonthDailyHPS:
+      m2?.weatherSummary?.selectedMonthDailyHPS ?? null,
+
+    selectedMonthTotalHPS:
+      m2?.weatherSummary?.selectedMonthTotalHPS ?? null,
+
+    gTiltDataLength: Array.isArray(m2Input.gTiltData)
+      ? m2Input.gTiltData.length
+      : 0,
+
+    validationMode: "stress_month_and_annual_8760_raw"
+  };
+
   return {
     selectedRouteKey,
     selectedRoute,
     config,
     params,
     economics,
+    weatherContext,
     m1Input,
+    m2Input,
+    m3Input,
+    m1,
     m2,
     m3
   };

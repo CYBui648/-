@@ -381,19 +381,61 @@ function round(value, digits = 2) {
   return Math.round(value * factor) / factor;
 }
 
-function resolveWorstMonthIndex(gTiltData) {
-  if (!Array.isArray(gTiltData) || gTiltData.length < 8760) return 0;
-  const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  const monthlySums = new Array(12).fill(0);
-  let cursor = 0;
-  for (let month = 0; month < 12; month++) {
-    const hours = monthDays[month] * 24;
-    for (let h = 0; h < hours; h++) {
-      monthlySums[month] += Number(gTiltData[cursor + h] || 0);
-    }
-    cursor += hours;
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const MONTH_NAMES = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
+
+function buildGTiltMonthlyStats(gTiltData) {
+  if (!Array.isArray(gTiltData) || gTiltData.length < 8760) {
+    return null;
   }
-  return monthlySums.indexOf(Math.min(...monthlySums));
+
+  const monthlyTotalHPS = [];
+  const monthlyDailyHPS = [];
+
+  let cursor = 0;
+
+  for (let month = 0; month < 12; month++) {
+    const days = MONTH_DAYS[month];
+    const hours = days * 24;
+    let monthlySum = 0;
+
+    for (let h = 0; h < hours; h++) {
+      monthlySum += Math.max(0, Number(gTiltData[cursor + h] || 0));
+    }
+
+    cursor += hours;
+
+    // G_tilt 单位为 W/m²，逐小时积分 /1000 = kWh/m² ≈ HPS
+    const totalHps = monthlySum / 1000;
+    const dailyHps = totalHps / days;
+
+    monthlyTotalHPS.push(totalHps);
+    monthlyDailyHPS.push(dailyHps);
+  }
+
+  const worstMonthByDailyHPS = monthlyDailyHPS.indexOf(
+    Math.min(...monthlyDailyHPS)
+  );
+
+  const worstMonthByTotalHPS = monthlyTotalHPS.indexOf(
+    Math.min(...monthlyTotalHPS)
+  );
+
+  return {
+    source: "tmy_8760_raw",
+    selectedMonthMethod: "daily_hps_min",
+    monthlyTotalHPS,
+    monthlyDailyHPS,
+    worstMonthByDailyHPS,
+    worstMonthByDailyHPSName: MONTH_NAMES[worstMonthByDailyHPS],
+    worstMonthByTotalHPS,
+    worstMonthByTotalHPSName: MONTH_NAMES[worstMonthByTotalHPS]
+  };
+}
+
+function resolveWorstMonthIndex(gTiltData) {
+  const stats = buildGTiltMonthlyStats(gTiltData);
+  return stats?.worstMonthByDailyHPS ?? 0;
 }
 
 function normalizeM2Input(context) {
@@ -408,12 +450,14 @@ function normalizeM2Input(context) {
     throw new Error("请先上传包含 8760 行 G_tilt 数据的 TMY CSV。");
   }
 
+  const weatherStats = buildGTiltMonthlyStats(m2Input.gTiltData);
+
   const monthIndex = m2Input.monthMode === "auto"
-    ? resolveWorstMonthIndex(m2Input.gTiltData)
+    ? (weatherStats?.worstMonthByDailyHPS ?? 0)
     : Number(m2Input.monthIndex || 0);
 
   const climate = CITY_CLIMATE_DATA[m1Input.climateKey] || CITY_CLIMATE_DATA.guangzhou;
-  const monthNames = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
+  const monthNames = MONTH_NAMES;
 
   return {
     P_pv: Number(m1Result.hardwarePlan.pvKw || 0),
@@ -423,6 +467,14 @@ function normalizeM2Input(context) {
     n30: Number(m1Result.hardwarePlan.n30kw || 0),
     monthIndex,
     monthLabel: monthNames[monthIndex] || `${monthIndex + 1}月`,
+    weatherSummary: {
+      ...(weatherStats || {}),
+      selectedMonthIndex: monthIndex,
+      selectedMonthName: monthNames[monthIndex] || `${monthIndex + 1}月`,
+      selectedMonthDailyHPS: weatherStats?.monthlyDailyHPS?.[monthIndex] ?? null,
+      selectedMonthTotalHPS: weatherStats?.monthlyTotalHPS?.[monthIndex] ?? null,
+      isAutoSelectedMonth: m2Input.monthMode === "auto"
+    },
     seed: 20260513 + monthIndex,
     gTiltData: m2Input.gTiltData,
     transformerLimit: Number(m2Input.transformerLimitKw ?? 500),
@@ -457,6 +509,7 @@ function mapToM2Result(raw, params, upstreamM1) {
       transformerUtilPct: round(transformerUtilPct, 1),
       usesM1Hardware: true
     },
+    weatherSummary: params.weatherSummary || null,
     hardwareSnapshot: {
       pvKw: params.P_pv,
       storageKwh: params.E_storage,

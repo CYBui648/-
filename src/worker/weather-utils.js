@@ -142,7 +142,7 @@ export function buildWeatherScenarioFromGTilt(gTiltData, baseClimate = {}) {
     source: "tmy_8760_fitted",
     sourceLabel: "由 8760 小时 TMY 倾斜面辐照度拟合",
 
-    // 原生数据保留给 M2/M3/M4 使用
+    // 原生数据保留给 M2/M3 使用
     gTiltData,
 
     // 明确单位的新字段

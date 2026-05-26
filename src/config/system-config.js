@@ -8,24 +8,18 @@ export const STAGES = {
   m2: {
     key: "m2",
     index: 2,
-    title: "M2 压力测试诊断",
-    jobType: "M2_STRESS_TEST"
+    title: "M2 四情景运行仿真",
+    jobType: "M2_SCENARIO_COMPARE"
   },
   m3: {
     key: "m3",
     index: 3,
-    title: "M3 价格调度与全年验证",
-    jobType: "M3_DISPATCH_DIAGNOSIS"
-  },
-  m4: {
-    key: "m4",
-    index: 4,
-    title: "M4 残余风险加固推荐",
-    jobType: "M4_FINALIZE_PLAN"
+    title: "M3 四情景配置优化",
+    jobType: "M3_SCENARIO_OPTIMIZATION"
   }
 };
 
-export const STAGE_ORDER = ["m1", "m2", "m3", "m4"];
+export const STAGE_ORDER = ["m1", "m2", "m3"];
 
 export const DEFAULT_PROJECT_INPUT = {
   projectName: "公共机构停车场光储充评估",
@@ -68,14 +62,6 @@ export const DEFAULT_PROJECT_INPUT = {
   },
   m3: {
     priceShiftThreshold: 0.55,
-    opexRate: 0.015,
-    selectedRoute: null
-  },
-  m4: {
-    scenarioCapexWeight: 0.18,
-    scenarioRiskWeight: 0.44,
-    scenarioGridWeight: 0.16,
-    scenarioPvWeight: 0.10,
-    scenarioLcoeWeight: 0.12
+    opexRate: 0.015
   }
 };

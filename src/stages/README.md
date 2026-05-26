@@ -1,10 +1,9 @@
 # stages 目录说明
 
-这一层属于应用编排视角下的“阶段入口”。
+这一层目前只保留应用编排视角的占位说明。当前实际阶段逻辑在：
 
-V2-0 暂时保留目录，不急着放业务代码。
-后续迁移时可视情况加入：
-- m1-baseline.js
-- m2-stress-test.js
-- m3-dispatch-diagnosis.js
-- m4-final-planner.js
+- `src/worker/m1-engine.js`
+- `src/worker/m2-engine.js`
+- `src/worker/m3-engine.js`
+
+后续如果重新拆阶段入口，只按 M1/M2/M3 三模块扩展。

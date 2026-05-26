@@ -6,7 +6,6 @@ import { renderApp } from "./ui/renderers.js";
 import { bindM1Inputs, hydrateM1Inputs } from "./ui/m1-inputs.js";
 import { bindM2Inputs, hydrateM2Inputs } from "./ui/m2-inputs.js";
 import { bindM3Inputs, hydrateM3Inputs } from "./ui/m3-inputs.js";
-import { bindM3RouteSelection } from "./ui/m3-route-selection.js";
 
 const state = createInitialState();
 
@@ -42,7 +41,6 @@ hydrateM3Inputs(state);
 bindM1Inputs(state, renderApp);
 bindM2Inputs(state, renderApp);
 bindM3Inputs(state, renderApp);
-bindM3RouteSelection(controller);
 renderApp(state);
 
 window.mgsV2 = {

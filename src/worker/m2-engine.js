@@ -455,9 +455,9 @@ function buildGTiltMonthlyStats(gTiltData, monthlyOccupancy = null) {
   };
 }
 
-function resolveWorstMonthIndex(gTiltData) {
-  const stats = buildGTiltMonthlyStats(gTiltData);
-  return stats?.worstMonthByDailyHPS ?? 0;
+function resolveWorstMonthIndex(gTiltData, monthlyOccupancy = null) {
+  const stats = buildGTiltMonthlyStats(gTiltData, monthlyOccupancy);
+  return stats?.worstMonthBySchoolPressure ?? stats?.worstMonthByDailyHPS ?? 0;
 }
 
 function normalizeM2Input(context) {

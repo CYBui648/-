@@ -26,8 +26,7 @@ function normMax(value, min, max) {
 
 export function scoreScenarios(
   evaluated,
-  weightsInput = {},
-  routeKey = "traditional_pile"
+  weightsInput = {}
 ) {
   const w = {
     risk: safeNumber(weightsInput.scenarioRiskWeight, 0.44),
@@ -44,12 +43,7 @@ export function scoreScenarios(
     safeNumber(s.annualValidation.monthsWithSocRisk, 0)
   );
   const serviceRiskValues = evaluated.map(s =>
-    routeKey === "flex_matrix"
-      ? safeNumber(s.annualValidation.totalMatrixQueueVehicleTicks, 0)
-      : safeNumber(s.annualValidation.totalQueueUnmetKwh, 0)
-  );
-  const pMatrixLimitedValues = evaluated.map(s =>
-    safeNumber(s.annualValidation.totalPMatrixLimitedEnergyKwh, 0)
+    safeNumber(s.annualValidation.totalQueueUnmetKwh, 0)
   );
   const capexValues = evaluated.map(s => safeNumber(s.extraCapexWan, 0));
   const gridValues = evaluated.map(s => safeNumber(s.evaluationIndicators.gff, 0));
@@ -61,7 +55,6 @@ export function scoreScenarios(
     overflow: [Math.min(...overflowValues), Math.max(...overflowValues)],
     soc: [Math.min(...socRiskValues), Math.max(...socRiskValues)],
     service: [Math.min(...serviceRiskValues), Math.max(...serviceRiskValues)],
-    pMatrix: [Math.min(...pMatrixLimitedValues), Math.max(...pMatrixLimitedValues)],
     capex: [Math.min(...capexValues), Math.max(...capexValues)],
     grid: [Math.min(...gridValues), Math.max(...gridValues)],
     pv: [Math.min(...pvValues), Math.max(...pvValues)],
@@ -84,28 +77,15 @@ export function scoreScenarios(
       ...ranges.soc
     );
 
-    const serviceRiskValue =
-      routeKey === "flex_matrix"
-        ? safeNumber(scenario.annualValidation.totalMatrixQueueVehicleTicks, 0)
-        : safeNumber(scenario.annualValidation.totalQueueUnmetKwh, 0);
+    const serviceRiskValue = safeNumber(
+      scenario.annualValidation.totalQueueUnmetKwh,
+      0
+    );
 
-    const queueServiceScore = normMin(
+    const serviceScore = normMin(
       serviceRiskValue,
       ...ranges.service
     );
-
-    const pMatrixLimitedValue =
-      safeNumber(scenario.annualValidation.totalPMatrixLimitedEnergyKwh, 0);
-
-    const pMatrixScore = normMin(
-      pMatrixLimitedValue,
-      ...ranges.pMatrix
-    );
-
-    const serviceScore =
-      routeKey === "flex_matrix"
-        ? (queueServiceScore + pMatrixScore) / 2
-        : queueServiceScore;
 
     const riskParts = [
       {
@@ -172,10 +152,7 @@ export function scoreScenarios(
         overflowRiskScore: round(overflowScore * 100, 1),
         socRiskScore: round(socScore * 100, 1),
         serviceRiskScore: round(serviceScore * 100, 1),
-        serviceRiskMetric:
-          routeKey === "flex_matrix"
-            ? "totalMatrixQueueVehicleTicks"
-            : "totalQueueUnmetKwh",
+        serviceRiskMetric: "totalQueueUnmetKwh",
 
         capexScore: round(capexScore * 100, 1),
         gridScore: round(gridScore * 100, 1),

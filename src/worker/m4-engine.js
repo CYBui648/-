@@ -181,7 +181,6 @@ function evaluateScenario(base, scenario) {
       monthsWithSocRisk: annual.monthsWithSocRisk || 0,
       totalDeliveredKwh: round(annual.totalDelivered || 0, 1),
       totalGridBuyKwh: round(annual.totalGridBuy || 0, 1),
-      totalV2gKwh: round(annual.totalV2g || 0, 1),
       annualGridCostYuan: round(annual.annualGridCost || 0, 1),
       annualLcoeYuanPerKwh: round(annual.annualLCOE || 999, 3)
     },
@@ -486,8 +485,7 @@ export function runM4FinalPlanner(context) {
 
   const scoredSpecialized = scoreScenarios(
     specializedWithImprovement,
-    context.input?.m4 || {},
-    base.selectedRouteKey
+    context.input?.m4 || {}
   );
 
   // ============================================================
@@ -520,8 +518,7 @@ export function runM4FinalPlanner(context) {
 
   const scored = scoreScenarios(
     allWithImprovement,
-    context.input?.m4 || {},
-    base.selectedRouteKey
+    context.input?.m4 || {}
   );
 
   const recommendation = buildRecommendation(scored);

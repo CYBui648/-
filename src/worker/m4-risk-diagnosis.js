@@ -45,63 +45,7 @@ export function diagnoseResidualRisk(base) {
   const annualRaw =
     base.m3?.selectedAnnualValidation?.rawAnnual?.annual || {};
 
-  // ---- 接口堵指标：压力月 ----
-  const stressMatrixQueueTicks =
-    safeNumber(routeResult.matrixQueueTicks, 0);
-  const stressMatrixQueueVehicleTicks =
-    safeNumber(routeResult.matrixQueueVehicleTicks, 0);
-  const stressMatrixQueuePeak =
-    safeNumber(routeResult.matrixQueuePeak, 0);
-
-  // ---- 接口堵指标：全年 ----
-  const annualMatrixQueueTicks =
-    safeNumber(
-      annualSummary.totalMatrixQueueTicks ??
-      annualRaw.totalMatrixQueueTicks,
-      0
-    );
-  const annualMatrixQueueVehicleTicks =
-    safeNumber(
-      annualSummary.totalMatrixQueueVehicleTicks ??
-      annualRaw.totalMatrixQueueVehicleTicks,
-      0
-    );
-  const annualMatrixQueuePeak =
-    safeNumber(
-      annualSummary.maxMatrixQueuePeak ??
-      annualRaw.maxMatrixQueuePeak,
-      0
-    );
-
-  // ---- 功率池堵指标：压力月 ----
-  const stressPMatrixLimitedTicks =
-    safeNumber(routeResult.pMatrixLimitedTicks, 0);
-  const stressPMatrixLimitedEnergy =
-    safeNumber(routeResult.pMatrixLimitedEnergyKwh, 0);
-  const stressPMatrixMaxGap =
-    safeNumber(routeResult.pMatrixMaxGapKw, 0);
-
-  // ---- 功率池堵指标：全年 ----
-  const annualPMatrixLimitedTicks =
-    safeNumber(
-      annualSummary.totalPMatrixLimitedTicks ??
-      annualRaw.totalPMatrixLimitedTicks,
-      0
-    );
-  const annualPMatrixLimitedEnergy =
-    safeNumber(
-      annualSummary.totalPMatrixLimitedEnergyKwh ??
-      annualRaw.totalPMatrixLimitedEnergyKwh,
-      0
-    );
-  const annualPMatrixMaxGap =
-    safeNumber(
-      annualSummary.maxPMatrixGapKw ??
-      annualRaw.maxPMatrixGapKw,
-      0
-    );
-
-  // ---- M3-B 全年核心指标（传统残余风险） ----
+  // ---- M3-B 全年核心指标 ----
   const annualTotalUnmet =
     safeNumber(
       annualSummary.totalUnmetKwh ??
@@ -244,90 +188,12 @@ export function diagnoseResidualRisk(base) {
   const powerActive = Boolean(powerLevel);
   const storageActive = Boolean(storageLevel);
 
-  // ---- 新增：accessPortRisk（接口堵） ----
-  const accessPortRiskActive =
-    stressMatrixQueueTicks > 0 ||
-    stressMatrixQueuePeak > 0 ||
-    annualMatrixQueueTicks > 0 ||
-    annualMatrixQueuePeak > 0 ||
-    residualQueue > 1;
-
-  const accessPortRiskLevel = accessPortRiskActive
-    ? maxRiskLevel(
-        residualQueue > 1
-          ? riskLevel(residualQueue, [30, 100])
-          : null,
-
-        stressMatrixQueueVehicleTicks > 0
-          ? riskLevel(stressMatrixQueueVehicleTicks, [24, 120])
-          : null,
-
-        stressMatrixQueuePeak > 0
-          ? riskLevel(stressMatrixQueuePeak, [2, 5])
-          : null,
-
-        annualMatrixQueueVehicleTicks > 0
-          ? riskLevel(annualMatrixQueueVehicleTicks, [96, 480])
-          : null,
-
-        annualMatrixQueuePeak > 0
-          ? riskLevel(annualMatrixQueuePeak, [2, 5])
-          : null
-      )
-    : null;
-
-  // ---- 新增：matrixPowerRisk（功率池堵） ----
-  const matrixPowerRiskActive =
-    stressPMatrixLimitedTicks > 0 ||
-    stressPMatrixLimitedEnergy > 1 ||
-    annualPMatrixLimitedTicks > 0 ||
-    annualPMatrixLimitedEnergy > 1 ||
-    annualPMatrixMaxGap > 1;
-
-  const matrixPowerRiskLevel = matrixPowerRiskActive
-    ? maxRiskLevel(
-        stressPMatrixLimitedEnergy > 1
-          ? riskLevel(stressPMatrixLimitedEnergy, [25, 120])
-          : null,
-
-        stressPMatrixLimitedTicks > 0
-          ? riskLevel(stressPMatrixLimitedTicks, [24, 120])
-          : null,
-
-        stressPMatrixMaxGap > 1
-          ? riskLevel(stressPMatrixMaxGap, [25, 100])
-          : null,
-
-        annualPMatrixLimitedEnergy > 1
-          ? riskLevel(annualPMatrixLimitedEnergy, [100, 500])
-          : null,
-
-        annualPMatrixLimitedTicks > 0
-          ? riskLevel(annualPMatrixLimitedTicks, [96, 480])
-          : null,
-
-        annualPMatrixMaxGap > 1
-          ? riskLevel(annualPMatrixMaxGap, [25, 100])
-          : null
-      )
-    : null;
-
-  // ---- serviceRisk 转为兼容聚合 ----
-  const serviceRiskLevel = maxRiskLevel(
-    accessPortRiskLevel,
-    matrixPowerRiskLevel
-  );
-  const serviceRiskActive =
-    Boolean(accessPortRiskActive || matrixPowerRiskActive);
-
-  // severityScore：从"直接揉指标"改为"风险等级综合打分"
+  // severityScore：四类传统风险综合打分
   const severityScore =
     levelScore(energyLevel) * 6 +
     levelScore(deliveryServiceLevel) * 6 +
     levelScore(powerLevel) * 5 +
-    levelScore(storageLevel) * 4 +
-    levelScore(accessPortRiskLevel) * 4 +
-    levelScore(matrixPowerRiskLevel) * 4;
+    levelScore(storageLevel) * 4;
 
   return {
     // 压力月口径（保留用于对比）
@@ -374,40 +240,13 @@ export function diagnoseResidualRisk(base) {
       }
     },
 
-    // 兼容聚合（旧字段）
-    serviceRisk: { active: serviceRiskActive, level: serviceRiskLevel },
+    // 四类风险
     deliveryServiceRisk: { active: deliveryServiceActive, level: deliveryServiceLevel },
     powerRisk: { active: powerActive, level: powerLevel },
     energyRisk: { active: energyActive, level: energyLevel },
     storageRisk: { active: storageActive, level: storageLevel },
 
-    // 新拆分数值
-    accessPortRisk: {
-      active: accessPortRiskActive,
-      level: accessPortRiskLevel
-    },
-    matrixPowerRisk: {
-      active: matrixPowerRiskActive,
-      level: matrixPowerRiskLevel
-    },
-
-    // 压力月柔性矩阵诊断明细
-    stressMatrixQueueTicks,
-    stressMatrixQueueVehicleTicks,
-    stressMatrixQueuePeak,
-    stressPMatrixLimitedTicks,
-    stressPMatrixLimitedEnergyKwh: round(stressPMatrixLimitedEnergy, 1),
-    stressPMatrixMaxGapKw: round(stressPMatrixMaxGap, 1),
-
-    // 全年柔性矩阵诊断明细
-    annualMatrixQueueTicks,
-    annualMatrixQueueVehicleTicks,
-    annualMatrixQueuePeak,
-    annualPMatrixLimitedTicks,
-    annualPMatrixLimitedEnergyKwh: round(annualPMatrixLimitedEnergy, 1),
-    annualPMatrixMaxGapKw: round(annualPMatrixMaxGap, 1),
-
-    severity: severityScore >= 60 ? "high" : severityScore >= 25 ? "medium" : "low",
+    severity: severityScore >= 50 ? "high" : severityScore >= 20 ? "medium" : "low",
     severityScore: round(severityScore, 1)
   };
 }

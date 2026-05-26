@@ -67,12 +67,7 @@ export const DEFAULT_PROJECT_INPUT = {
     gTiltStatus: "尚未加载 TMY CSV"
   },
   m3: {
-    useV2G: true,
     priceShiftThreshold: 0.55,
-    clipThreshold: 0.90,
-    minClipSlackHours: 2,
-    maxV2gPerEvKwh: 8,
-    v2gWearCostYuanPerKwh: 0.15,
     opexRate: 0.015,
     selectedRoute: null
   },

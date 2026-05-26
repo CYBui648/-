@@ -411,7 +411,7 @@
     <article class="result-summary-card decision-summary-card">
       <span class="eyebrow">M3 结果摘要</span>
       <h4 id="m3-summary-title">M3 尚未运行。</h4>
-      <p id="m3-summary-meta">M2 完成后，运行双路线评估。</p>
+      <p id="m3-summary-meta">M2 完成后，运行价格调度评估。</p>
     </article>
 
     <article class="info-card m3-baseline-card compact-card">
@@ -444,29 +444,12 @@
       <button class="secondary-btn route-select-btn" data-m3-route="traditional_pile" id="select-m3-traditional" disabled>选择传统桩站路线并验证全年表现</button>
     </article>
 
-    <article class="route-card" id="m3-route-flex-card">
-      <div class="route-head">
-        <div>
-          <span class="route-kicker">路线 B</span>
-          <h4>柔性调度路线</h4>
-        </div>
-        <em id="m3-flex-selected">未选择</em>
-      </div>
-      <p class="route-copy">适合具备柔性配电、动态枪位接入或愿意采用矩阵化调度架构的项目。</p>
-      <div class="route-metrics">
-        <div><span>调度后峰值</span><strong id="m3-flex-peak">-- kW</strong></div>
-        <div><span>残余总缺口</span><strong id="m3-flex-unmet">-- kWh</strong></div>
-        <div><span>建议 N_matrix</span><strong id="m3-flex-nmatrix">--</strong></div>
-        <div><span>是否需 M4 加固</span><strong id="m3-flex-status">--</strong></div>
-      </div>
-      <button class="secondary-btn route-select-btn" data-m3-route="flex_matrix" id="select-m3-flex" disabled>选择柔性调度路线并验证全年表现</button>
-    </article>
   </section>
 
   <article class="info-card m3-baseline-lift-card">
     <div class="chart-card-head">
       <div>
-        <h4>两条路线相对基准的改善效果</h4>
+        <h4>价格调度相对压力基线的改善效果</h4>
         <p class="helper-copy">
           以 M1 基准方案在 M2 压力月中的风险暴露为参照，展示传统桩站价格调度能消除多少风险。
         </p>
@@ -474,7 +457,7 @@
     </div>
 
     <div class="baseline-lift-chart" id="m3-route-compare-chart">
-      <div class="insight-chart-empty">运行 M3 后展示两条路线各自相对基准的改善效果。</div>
+      <div class="insight-chart-empty">运行 M3 后展示价格调度相对压力基线的改善效果。</div>
     </div>
   </article>
 
@@ -491,7 +474,7 @@
   <article class="info-card selected-handoff-card">
     <h4>M3-B 所选路线全年连续验证</h4>
     <p class="helper-copy" id="m3-annual-meta">
-      选择技术路线后，将自动执行全年 365 天连续调度验证。
+      选择传统桩站价格调度后，将自动执行全年 365 天连续调度验证。
     </p>
     <div class="diagnosis-grid">
       <div><span>全年总缺口</span><strong id="m3-annual-unmet">-- kWh</strong></div>
@@ -576,30 +559,18 @@
     </div>
   </article>
 
-  <details class="disclosure-card">
-    <summary>高级调度参数</summary>
-    <div class="disclosure-body">
-      <div class="form-grid">
-        <label class="toggle-line">启用 V2G
-          <input type="checkbox" data-m3-input="useV2G" id="m3-useV2G">
-        </label>
+  <details class=”disclosure-card”>
+    <summary>高级价格调度参数</summary>
+    <div class=”disclosure-body”>
+      <div class=”form-grid”>
         <label>价格敏感阈值
-          <input type="number" data-m3-input="priceShiftThreshold" min="0" max="1" step="0.05">
+          <input type=”number” data-m3-input=”priceShiftThreshold” min=”0” max=”1” step=”0.05”>
         </label>
-        <label>削峰触发阈值
-          <input type="number" data-m3-input="clipThreshold" min="0.70" max="1" step="0.01">
-        </label>
-        <label>可限流最小冗余 小时
-          <input type="number" data-m3-input="minClipSlackHours" min="0.5" max="8" step="0.5">
-        </label>
-        <label>单车 V2G 上限 kWh
-          <input type="number" data-m3-input="maxV2gPerEvKwh" min="0" max="30" step="1">
-        </label>
-        <label>V2G 损耗成本 元/kWh
-          <input type="number" data-m3-input="v2gWearCostYuanPerKwh" min="0" max="1" step="0.01">
+        <label>调度运维系数
+          <input type=”number” data-m3-input=”opexRate” min=”0” max=”0.1” step=”0.005”>
         </label>
       </div>
-      <p class=”helper-copy”>这些是调度共享口径。默认折叠，是为了让 M3 页面先聚焦”选路线”，再看高级参数。</p>
+      <p class=”helper-copy”>价格敏感阈值用于控制可转移车辆对峰谷价差的响应强度。阈值越低，参与错峰的车辆越多；阈值越高，调度越保守。</p>
     </div>
   </details>
 

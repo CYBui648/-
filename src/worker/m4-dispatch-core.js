@@ -365,17 +365,14 @@ function writeBackFixedCarSoc(ev) {
   if (!ev?.car || ev.socWrittenBack) return;
 
   const delivered = Math.max(0, ev.deliveredEnergy || 0);
-  const v2gBorrowed = Math.max(0, ev.v2gBorrowed || 0);
   const capacity = Math.max(1, ev.car.capacity || 1);
 
-  // 净入车电量 = 站内累计交付 - 车辆经 V2G 向系统反送的电量
-  const netEnergyIntoCar = delivered - v2gBorrowed;
-
   ev.car.soc = clamp(
-    (ev.initSoc || 0) + netEnergyIntoCar / capacity,
+    (ev.initSoc || 0) + delivered / capacity,
     0.03,
     ev.targetSoc ?? 1.0
   );
+
   ev.socWrittenBack = true;
 }
 
@@ -646,7 +643,7 @@ function runTraditionalPileDispatch(payload) {
       mode: 'traditional_pile',
       realPeak, overflowCount, unmetTotal, queueUnmet, abandonedCount, deliveredEnergy, eBuyValley, eBuyFlat, eBuyPeak,
       shiftedCount, avgDelayHours: shiftedCount > 0 ? delayTicksTotal / shiftedCount / 4 : 0,
-      clippedCount: 0, v2gCount: 0, v2gEnergy: 0,
+      clippedCount: 0,
       activePeak: queuedPeak, readyPeak: chargingPeak,
       socMin: Number.isFinite(socMin) ? socMin : 0,
       curtailmentRate: totalPvGen > 0 ? totalCurtailed / totalPvGen * 100 : 0,

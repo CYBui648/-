@@ -50,34 +50,7 @@ function buildAdaptiveTransformerCandidates(transformerGapKw) {
   return candidates;
 }
 
-function buildAdaptivePMatrixCandidates(matrixPowerGapKw) {
-  const diagnosedGap = safeNumber(matrixPowerGapKw, 0);
-  const anchorGapKw = diagnosedGap > 0 ? diagnosedGap : 50;
-
-  const stepKw =
-    anchorGapKw <= 40
-      ? 5
-      : anchorGapKw <= 120
-        ? 10
-        : 25;
-
-  const rawCandidates = [0.5, 1.0, 1.5].map((factor) =>
-    ceilToStep(anchorGapKw * factor, stepKw)
-  );
-
-  const candidates = uniqueSortedPositive(rawCandidates);
-
-  while (candidates.length < 3) {
-    const last = candidates[candidates.length - 1] || stepKw;
-    candidates.push(last + stepKw);
-  }
-
-  return candidates.slice(0, 3);
-}
-
 export function buildScenarioPlans(base, diagnosis) {
-  const routeKey = base.selectedRouteKey;
-
   const residualUnmet = safeNumber(diagnosis.residualUnmetKwh, 0);
   const residualQueue = safeNumber(diagnosis.residualQueueUnmetKwh, 0);
   const transformerGap = safeNumber(diagnosis.transformerGapKw, 0);
@@ -85,8 +58,6 @@ export function buildScenarioPlans(base, diagnosis) {
   const powerRisk = diagnosis.powerRisk || {};
   const energyRisk = diagnosis.energyRisk || {};
   const storageRisk = diagnosis.storageRisk || {};
-  const accessPortRisk = diagnosis.accessPortRisk || {};
-  const matrixPowerRisk = diagnosis.matrixPowerRisk || {};
   const deliveryServiceRisk = diagnosis.deliveryServiceRisk || {};
 
   const annualTotalUnmet =
@@ -106,9 +77,7 @@ export function buildScenarioPlans(base, diagnosis) {
     deltaPcsKw: 0,
     deltaTransformerKw: 0,
     deltaN7: 0,
-    deltaN30: 0,
-    deltaMatrix: 0,
-    deltaPMatrixKw: 0
+    deltaN30: 0
   });
 
   const makeScenario = ({
@@ -169,41 +138,17 @@ export function buildScenarioPlans(base, diagnosis) {
       : null
   ].filter(Boolean);
 
-  const s3TriggerBasis =
-    routeKey === "traditional_pile"
-      ? [
-          deliveryServiceRisk.active
-            ? `接入服务风险等级：${deliveryServiceRisk.level}`
-            : null,
-          residualQueue > 0
-            ? `压力月排队损失 ${round(residualQueue, 1)} kWh`
-            : null,
-          annualTotalQueueUnmet > 0
-            ? `全年累计排队损失 ${round(annualTotalQueueUnmet, 1)} kWh`
-            : null
-        ].filter(Boolean)
-      : [
-          accessPortRisk.active
-            ? `矩阵接口拥堵风险等级：${accessPortRisk.level}`
-            : null,
-          matrixPowerRisk.active
-            ? `矩阵功率池受限风险等级：${matrixPowerRisk.level}`
-            : null,
-
-          diagnosis.stressMatrixQueueVehicleTicks > 0
-            ? `压力月矩阵接口排队车时 ${diagnosis.stressMatrixQueueVehicleTicks}`
-            : null,
-          diagnosis.annualMatrixQueueVehicleTicks > 0
-            ? `全年矩阵接口排队车时 ${diagnosis.annualMatrixQueueVehicleTicks}`
-            : null,
-
-          diagnosis.stressPMatrixLimitedEnergyKwh > 0
-            ? `压力月 P_matrix 受限能量 ${round(diagnosis.stressPMatrixLimitedEnergyKwh, 1)} kWh`
-            : null,
-          diagnosis.annualPMatrixLimitedEnergyKwh > 0
-            ? `全年 P_matrix 受限能量 ${round(diagnosis.annualPMatrixLimitedEnergyKwh, 1)} kWh`
-            : null
-        ].filter(Boolean);
+  const s3TriggerBasis = [
+    deliveryServiceRisk.active
+      ? `接入服务风险等级：${deliveryServiceRisk.level}`
+      : null,
+    residualQueue > 0
+      ? `压力月排队损失 ${round(residualQueue, 1)} kWh`
+      : null,
+    annualTotalQueueUnmet > 0
+      ? `全年累计排队损失 ${round(annualTotalQueueUnmet, 1)} kWh`
+      : null
+  ].filter(Boolean);
 
   // ============================================================
   // 2. 基准方案 S0
@@ -302,136 +247,48 @@ export function buildScenarioPlans(base, diagnosis) {
   // 5. S3：服务能力加固候选族
   // ============================================================
 
-  if (routeKey === "traditional_pile") {
-    if (deliveryServiceRisk.active) {
-      const serviceCandidatesByLevel = {
-        low: [
-          { deltaN7: 2, deltaN30: 1, label: "7kW +2 / 30kW +1" },
-          { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" }
-        ],
-        medium: [
-          { deltaN7: 2, deltaN30: 1, label: "7kW +2 / 30kW +1" },
-          { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" },
-          { deltaN7: 6, deltaN30: 3, label: "7kW +6 / 30kW +3" }
-        ],
-        high: [
-          { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" },
-          { deltaN7: 8, deltaN30: 4, label: "7kW +8 / 30kW +4" },
-          { deltaN7: 12, deltaN30: 6, label: "7kW +12 / 30kW +6" }
-        ]
-      };
+  if (deliveryServiceRisk.active) {
+    const serviceCandidatesByLevel = {
+      low: [
+        { deltaN7: 2, deltaN30: 1, label: "7kW +2 / 30kW +1" },
+        { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" }
+      ],
+      medium: [
+        { deltaN7: 2, deltaN30: 1, label: "7kW +2 / 30kW +1" },
+        { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" },
+        { deltaN7: 6, deltaN30: 3, label: "7kW +6 / 30kW +3" }
+      ],
+      high: [
+        { deltaN7: 4, deltaN30: 2, label: "7kW +4 / 30kW +2" },
+        { deltaN7: 8, deltaN30: 4, label: "7kW +8 / 30kW +4" },
+        { deltaN7: 12, deltaN30: 6, label: "7kW +12 / 30kW +6" }
+      ]
+    };
 
-      const serviceCandidates =
-        serviceCandidatesByLevel[deliveryServiceRisk.level] ||
-        serviceCandidatesByLevel.medium;
+    const serviceCandidates =
+      serviceCandidatesByLevel[deliveryServiceRisk.level] ||
+      serviceCandidatesByLevel.medium;
 
-      serviceCandidates.forEach((candidate, index) => {
-        scenarios.push(
-          makeScenario({
-            id: `S3-${index + 1}`,
-            family: "S3",
-            title: "S3 服务能力加固",
-            variantLabel: candidate.label,
-            intent: "围绕传统桩站路线，测试有限固定桩扩容阶梯对排队损失与服务交付风险的改善效果。",
-            triggerBasis: [
-              ...s3TriggerBasis,
-              `候选档位：${candidate.label}`
-            ],
-            deltas: {
-              deltaN7: candidate.deltaN7,
-              deltaN30: candidate.deltaN30
-            }
-          })
-        );
-      });
-    }
-  } else {
-    const hasPortRisk = accessPortRisk.active === true;
-    const hasPowerPoolRisk = matrixPowerRisk.active === true;
-
-    if (hasPortRisk || hasPowerPoolRisk) {
-      const matrixCandidatesByLevel = {
-        low: [
-          { deltaMatrix: 2 },
-          { deltaMatrix: 4 },
-          { deltaMatrix: 6 }
-        ],
-        medium: [
-          { deltaMatrix: 4 },
-          { deltaMatrix: 6 },
-          { deltaMatrix: 8 }
-        ],
-        high: [
-          { deltaMatrix: 6 },
-          { deltaMatrix: 10 },
-          { deltaMatrix: 14 }
-        ]
-      };
-
-      const matrixCandidates =
-        hasPortRisk
-          ? (
-              matrixCandidatesByLevel[accessPortRisk.level] ||
-              matrixCandidatesByLevel.medium
-            )
-          : [
-              { deltaMatrix: 0 },
-              { deltaMatrix: 0 },
-              { deltaMatrix: 0 }
-            ];
-
-      const matrixPowerGapKw = Math.max(
-        safeNumber(diagnosis.stressPMatrixMaxGapKw, 0),
-        safeNumber(diagnosis.annualPMatrixMaxGapKw, 0)
+    serviceCandidates.forEach((candidate, index) => {
+      scenarios.push(
+        makeScenario({
+          id: `S3-${index + 1}`,
+          family: "S3",
+          title: "S3 服务能力加固",
+          variantLabel: candidate.label,
+          intent:
+            "围绕传统桩站价格调度后的残余服务风险，测试固定充电桩扩容对排队损失与服务率的改善效果。",
+          triggerBasis: [
+            ...s3TriggerBasis,
+            `候选档位：${candidate.label}`
+          ],
+          deltas: {
+            deltaN7: candidate.deltaN7,
+            deltaN30: candidate.deltaN30
+          }
+        })
       );
-
-      const pMatrixCandidates =
-        hasPowerPoolRisk
-          ? buildAdaptivePMatrixCandidates(matrixPowerGapKw)
-          : [0, 0, 0];
-
-      for (let index = 0; index < 3; index += 1) {
-        const deltaMatrix =
-          safeNumber(matrixCandidates[index]?.deltaMatrix, 0);
-
-        const deltaPMatrixKw =
-          safeNumber(pMatrixCandidates[index], 0);
-
-        const labelParts = [];
-
-        if (deltaMatrix > 0) {
-          labelParts.push(`N_matrix +${deltaMatrix}`);
-        }
-
-        if (deltaPMatrixKw > 0) {
-          labelParts.push(`P_matrix +${deltaPMatrixKw} kW`);
-        }
-
-        const label =
-          labelParts.length > 0
-            ? labelParts.join(" / ")
-            : "未触发";
-
-        scenarios.push(
-          makeScenario({
-            id: `S3-${index + 1}`,
-            family: "S3",
-            title: "S3 柔性矩阵服务能力加固",
-            variantLabel: label,
-            intent:
-              "围绕柔性矩阵路线，联合测试接口端口扩容与矩阵功率池扩容，对接入拥堵与功率池受限风险的修复效果。",
-            triggerBasis: [
-              ...s3TriggerBasis,
-              `候选档位：${label}`
-            ],
-            deltas: {
-              deltaMatrix,
-              deltaPMatrixKw
-            }
-          })
-        );
-      }
-    }
+    });
   }
 
   return scenarios;
@@ -452,9 +309,7 @@ export function buildCompositeScenarioPlans(
     deltaPcsKw: 0,
     deltaTransformerKw: 0,
     deltaN7: 0,
-    deltaN30: 0,
-    deltaMatrix: 0,
-    deltaPMatrixKw: 0
+    deltaN30: 0
   });
 
   const mergeDeltas = (scenarios) => {
@@ -468,8 +323,6 @@ export function buildCompositeScenarioPlans(
       merged.deltaTransformerKw += safeNumber(d.deltaTransformerKw, 0);
       merged.deltaN7 += safeNumber(d.deltaN7, 0);
       merged.deltaN30 += safeNumber(d.deltaN30, 0);
-      merged.deltaMatrix += safeNumber(d.deltaMatrix, 0);
-      merged.deltaPMatrixKw += safeNumber(d.deltaPMatrixKw, 0);
     });
 
     return merged;
@@ -623,9 +476,7 @@ export function buildCompositeScenarioPlans(
       safeNumber(d.deltaPcsKw, 0),
       safeNumber(d.deltaTransformerKw, 0),
       safeNumber(d.deltaN7, 0),
-      safeNumber(d.deltaN30, 0),
-      safeNumber(d.deltaMatrix, 0),
-      safeNumber(d.deltaPMatrixKw, 0)
+      safeNumber(d.deltaN30, 0)
     ].join("|");
 
     if (seenDeltaSignatures.has(signature)) return;

@@ -247,6 +247,38 @@ export function diagnoseResidualRisk(base) {
     storageRisk: { active: storageActive, level: storageLevel },
 
     severity: severityScore >= 50 ? "high" : severityScore >= 20 ? "medium" : "low",
-    severityScore: round(severityScore, 1)
+    severityScore: round(severityScore, 1),
+
+    // 兼容 M4 方案生成器的命名
+    powerBoundaryRisk: { active: powerActive, level: powerLevel },
+    energySocRisk: {
+      active: energyActive || storageActive,
+      level: maxRiskLevel(energyLevel, storageLevel),
+      energyLevel,
+      storageLevel
+    },
+
+    compositeRisk: {
+      active:
+        energyActive ||
+        deliveryServiceActive ||
+        powerActive ||
+        storageActive,
+      level: severityScore >= 50 ? "high" : severityScore >= 20 ? "medium" : "low",
+      severityScore: round(severityScore, 1)
+    },
+
+    summary: {
+      activeRiskCount: [
+        energyActive,
+        deliveryServiceActive,
+        powerActive,
+        storageActive
+      ].filter(Boolean).length,
+      conclusion:
+        severityScore > 0
+          ? "价格调度后仍存在残余风险，需要进入工程加固方案生成。"
+          : "价格调度后主要运行风险已被有效控制，可将基准方案作为候选定型方案。"
+    }
   };
 }

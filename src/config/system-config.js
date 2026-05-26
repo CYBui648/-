@@ -2,25 +2,25 @@ export const STAGES = {
   m1: {
     key: "m1",
     index: 1,
-    title: "M1 基准规划",
+    title: "M1 基准配置生成",
     jobType: "M1_PLAN"
   },
   m2: {
     key: "m2",
     index: 2,
-    title: "M2 压力测试",
+    title: "M2 压力测试诊断",
     jobType: "M2_STRESS_TEST"
   },
   m3: {
     key: "m3",
     index: 3,
-    title: "M3 调度诊断",
+    title: "M3 价格调度与全年验证",
     jobType: "M3_DISPATCH_DIAGNOSIS"
   },
   m4: {
     key: "m4",
     index: 4,
-    title: "M4 方案定型",
+    title: "M4 残余风险加固推荐",
     jobType: "M4_FINALIZE_PLAN"
   }
 };

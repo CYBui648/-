@@ -154,7 +154,7 @@
       <h3>标准周基准规划器</h3>
       <p>这一步已经接入旧版 M1 的真实计算主链：需求生成、桩数推导、光伏/储能/PCS 基准配置。</p>
     </div>
-    <button class="primary-btn" id="run-m1">运行 M1 真实规划</button>
+    <button class="primary-btn" id="run-m1">运行 M1 基准配置</button>
   </div>
 
   <div class="m1-layout">
@@ -464,7 +464,7 @@
   <article class="info-card selected-handoff-card">
     <h4>当前已选择路线</h4>
     <div class="diagnosis-grid">
-      <div><span>技术路线</span><strong id="m3-selected-route">尚未选择</strong></div>
+      <div><span>调度方案</span><strong id="m3-selected-route">尚未选择</strong></div>
       <div><span>是否仍需硬件加固</span><strong id="m3-selected-need">--</strong></div>
       <div><span>残余缺口</span><strong id="m3-selected-unmet">-- kWh</strong></div>
       <div><span>残余越限</span><strong id="m3-selected-overflow">-- 次</strong></div>
@@ -589,7 +589,7 @@
       <h3>最终工程方案定型器</h3>
       <p>先看系统最终推荐什么，再看为什么推荐。M4 沿 M3 已选路线生成 S0~S4，并完成复验与综合评分。</p>
     </div>
-    <button class="primary-btn" id="run-m4" disabled>运行 M4 最终方案定型</button>
+    <button class="primary-btn" id="run-m4" disabled>运行 M4 加固推荐</button>
   </div>
 
   <article class="info-card m4-handoff-bridge-card">
@@ -606,7 +606,7 @@
 
     <div class="diagnosis-grid m4-handoff-grid">
       <div>
-        <span>承接技术路线</span>
+        <span>承接调度方案</span>
         <strong id="m4-handoff-route">--</strong>
       </div>
       <div>

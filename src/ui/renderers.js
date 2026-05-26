@@ -1211,17 +1211,17 @@ function renderButtons(state) {
       button.textContent = "计算中...";
     } else if (stage.status === "done") {
       button.textContent =
-        key === "m1" ? "重新运行 M1 真实规划" :
+        key === "m1" ? "重新运行 M1 基准配置" :
         key === "m2" ? "重新运行 M2 压力测试" :
         key === "m3" ? "重新运行 M3 价格调度" :
-        key === "m4" ? "重新运行 M4 最终方案定型" :
+        key === "m4" ? "重新运行 M4 加固推荐" :
         `重新运行 ${key.toUpperCase()}`;
     } else {
       button.textContent =
-        key === "m1" ? "运行 M1 真实规划" :
+        key === "m1" ? "运行 M1 基准配置" :
         key === "m2" ? "运行 M2 压力测试" :
         key === "m3" ? "运行 M3 价格调度" :
-        key === "m4" ? "运行 M4 最终方案定型" :
+        key === "m4" ? "运行 M4 加固推荐" :
         `运行 ${key.toUpperCase()}`;
     }
   });
@@ -1660,22 +1660,22 @@ function renderM3Summary(state) {
   const el = dom.m3Summary;
 
   const resetAnnualSummary = () => {
-    el.annualMeta.textContent = "选择技术路线后，将自动执行全年 365 天连续调度验证。";
+    el.annualMeta.textContent = "完成价格调度评估后，将自动执行全年 365 天连续调度验证。";
     el.annualUnmet.textContent = "-- kWh";
     el.annualService.textContent = "--%";
     el.annualOverflowMonths.textContent = "--";
     el.annualSocMonths.textContent = "--";
 
     el.annualConclusionText.textContent =
-      "完成所选路线全年验证后，这里将自动提炼年度判断与进入 M4 的依据。";
+      "完成价格调度全年验证后，这里将自动提炼年度判断与进入 M4 的依据。";
     el.annualJudgement.textContent = "--";
     el.annualMainRisk.textContent = "--";
     el.annualFocusMonths.textContent = "--";
     el.annualM4Focus.textContent = "--";
 
-    el.annualStressMeta.textContent = "完成所选路线全年验证后，这里将展示全年连续调度曲线，用于对照原始压力与调度后负荷。";
+    el.annualStressMeta.textContent = "完成价格调度全年验证后，这里将展示全年连续调度曲线，用于对照原始压力与调度后负荷。";
     resetInsightChart(el.annualStressChart, "完成 M3-B 全年验证后展示全年压力测试曲线。");
-    el.annualChartMeta.textContent = "完成所选路线全年验证后，这里将展示 12 个月风险分布。";
+    el.annualChartMeta.textContent = "完成价格调度全年验证后，这里将展示 12 个月风险分布。";
     resetAnnualChart(el.annualUnmetChart);
     resetAnnualChart(el.annualServiceChart);
     resetAnnualChart(el.annualOverflowChart);
@@ -1936,12 +1936,12 @@ function riskDiagnosisText(diagnosis) {
 function renderM4HandoffBridge(el, selectedRoute, selectedAnnualResult, selectedAnnual, selectedMonthly) {
   if (!selectedRoute) {
     el.handoffSummary.textContent =
-      "尚未选择 M3 技术路线。完成 M3-A 并选择路线后，M4 才会获得明确承接对象。";
+      "尚未完成 M3 价格调度验证。完成 M3-A 与 M3-B 后，M4 才会获得明确承接对象。";
     el.handoffRoute.textContent = "--";
     el.handoffJudgement.textContent = "--";
     el.handoffMainRisk.textContent = "--";
     el.handoffFocusMonths.textContent = "--";
-    el.handoffTask.textContent = "等待技术路线选择。";
+    el.handoffTask.textContent = "等待价格调度全年验证。";
     return;
   }
 
@@ -2268,8 +2268,8 @@ function renderM4Summary(state) {
     el.meta.textContent = selectedAnnual
       ? "已承接 M3-B 全年验证结论，可以运行最终工程方案定型。"
       : selectedRoute
-        ? "已选择技术路线，待 M3-B 全年验证完成后进入最终工程方案定型。"
-        : "在 M3 选择路线并完成 M3-B 年度验证后运行最终工程方案定型。";
+        ? "价格调度结果已生成，待 M3-B 全年验证完成后进入最终工程方案定型。"
+        : "完成 M3 价格调度与 M3-B 年度验证后运行最终工程方案定型。";
     el.residualSeverity.textContent = "--";
     el.recommendMain.textContent = "--";
     el.recommendLow.textContent = "--";
@@ -2435,15 +2435,15 @@ function renderReportBoard(state) {
     el.action.textContent = "运行 M4";
     el.actionNote.textContent = getM4FocusText(selectedAnnual);
   } else if (m3?.routeOptions) {
-    el.headline.textContent = "调度路线已生成，先选择路线再做年度验证";
-    el.subtitle.textContent = "完成价格调度评估后，选择传统桩站路线进入全年验证。";
-    el.action.textContent = "选择 M3 路线";
+    el.headline.textContent = "价格调度已生成，等待全年验证";
+    el.subtitle.textContent = "完成价格调度评估后，进入全年连续验证，形成 M4 加固输入。";
+    el.action.textContent = "执行 M3-B";
     el.actionNote.textContent = "形成 M4 输入";
   } else if (m2?.riskReport) {
     el.headline.textContent = "压力风险已暴露，下一步评估调度消纳能力";
     el.subtitle.textContent = `压力月峰值 ${formatNumber(m2.riskReport.realPeakKw, 1)} kW，缺口 ${formatNumber(m2.riskReport.unmetTotalKwh, 1)} kWh。`;
     el.action.textContent = "运行 M3";
-    el.actionNote.textContent = "比较调度路线";
+    el.actionNote.textContent = "评估价格调度";
   } else if (m1?.hardwarePlan) {
     el.headline.textContent = "基准建设规模已生成";
     el.subtitle.textContent = `${m1.summary.city} 基准方案：PV ${formatNumber(m1.hardwarePlan.pvKw, 1)} kW，储能 ${formatNumber(m1.hardwarePlan.storageKwh, 1)} kWh。`;

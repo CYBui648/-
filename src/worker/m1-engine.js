@@ -209,37 +209,134 @@ function evaluateCandidateAcrossMonths(candidate, params, demand) {
   };
 }
 
+function annualizeWeekValue(value) {
+  return (value || 0) * 365 / 7;
+}
+
+function buildBaselineIrradianceSeries(params, length) {
+  const monthlySeries = Array.from({ length: 12 }, (_, monthIndex) => {
+    const irradiance = buildIrradianceSeries(params, length, {
+      monthIndex,
+      useGTilt: false
+    });
+
+    return {
+      monthIndex,
+      weight: MONTH_DAYS[monthIndex] / 7,
+      irradiance
+    };
+  });
+
+  const totalWeight = monthlySeries.reduce((sum, item) => sum + item.weight, 0);
+
+  return Array.from({ length }, (_, i) => {
+    const weightedValue = monthlySeries.reduce((sum, item) => {
+      return sum + (item.irradiance[i] || 0) * item.weight;
+    }, 0);
+
+    return totalWeight > 0 ? weightedValue / totalWeight : 0;
+  });
+}
+
+function evaluateCandidateOnBaselineWeather(candidate, params, demand) {
+  const irradiance = buildBaselineIrradianceSeries(params, demand.loadCurve.length);
+
+  const simulation = simulateEnergyScenario({
+    hardware: candidate,
+    loadCurve: demand.loadCurve,
+    irradiance,
+    params,
+    scenarioKey: "offgrid_rule"
+  });
+
+  const summary = simulation.summary;
+  const capex = calcCapexWan(candidate, params);
+
+  const renewableUsedKwh = (summary.pvToLoadKwh || 0) + (summary.batteryToLoadKwh || 0);
+  const renewableSupplyRate = ratio(renewableUsedKwh, summary.demandKwh || 0);
+  const pvSelfUseRate = ratio(renewableUsedKwh, summary.pvGenerationKwh || 0);
+
+  const annualDemandKwh = annualizeWeekValue(summary.demandKwh);
+  const annualEquivalentUnservedKwh = annualizeWeekValue(summary.unservedEnergyKwh);
+  const annualEquivalentPvKwh = annualizeWeekValue(summary.pvGenerationKwh);
+  const annualEquivalentCurtailmentKwh = annualizeWeekValue(summary.curtailmentKwh);
+
+  const renewableShortfall = Math.max(
+    0,
+    params.renewableTarget - renewableSupplyRate
+  );
+
+  const baselineUnservedRate = ratio(
+    summary.unservedEnergyKwh || 0,
+    summary.demandKwh || 0
+  );
+
+  const score = {
+    baselineWeatherType: "weighted_average_typical_week",
+
+    baselineDemandKwh: summary.demandKwh || 0,
+    baselineUnservedKwh: summary.unservedEnergyKwh || 0,
+    baselineUnservedRate,
+
+    annualDemandKwh,
+    annualEquivalentUnservedKwh,
+    annualUnservedRate: baselineUnservedRate,
+    annualEquivalentPvKwh,
+    annualEquivalentCurtailmentKwh,
+
+    serviceRate: summary.serviceRate || 0,
+    deficitHours: summary.deficitHours || 0,
+    socMinPct: summary.socMinPct || 0,
+
+    pvSelfUseRate,
+    renewableSupplyRate,
+    renewableShortfall,
+    curtailmentRatePct: summary.curtailmentRatePct || 0,
+
+    capexWan: capex.capexWan,
+    lcoeYuanPerKwh: calcLcoeYuanPerKwh(
+      capex.capexWan,
+      annualDemandKwh,
+      0,
+      params.opexRate
+    )
+  };
+
+  return {
+    candidate,
+    baselineWeatherType: "weighted_average_typical_week",
+    simulation,
+    score
+  };
+}
+
 function isBetterBaseline(next, best) {
   if (!best) return true;
 
   const n = next.score;
   const b = best.score;
 
-  // 1. 先看全年等效离网缺口率
-  if (n.annualUnservedRate < b.annualUnservedRate - 0.0005) return true;
-  if (n.annualUnservedRate > b.annualUnservedRate + 0.0005) return false;
+  // 1. 基准气象下离网缺口率
+  if (n.baselineUnservedRate < b.baselineUnservedRate - 0.0005) return true;
+  if (n.baselineUnservedRate > b.baselineUnservedRate + 0.0005) return false;
 
-  // 2. 再看最差月缺口率
-  if (n.worstMonthUnservedRate < b.worstMonthUnservedRate - 0.001) return true;
-  if (n.worstMonthUnservedRate > b.worstMonthUnservedRate + 0.001) return false;
+  // 2. 基准气象下绝对缺口
+  if (n.baselineUnservedKwh < b.baselineUnservedKwh - 1) return true;
+  if (n.baselineUnservedKwh > b.baselineUnservedKwh + 1) return false;
 
-  // 3. 再看最差月绝对缺口
-  if (n.worstMonthUnservedKwh < b.worstMonthUnservedKwh - 1) return true;
-  if (n.worstMonthUnservedKwh > b.worstMonthUnservedKwh + 1) return false;
-
-  // 4. 再看全年服务率
+  // 3. 服务率
   if (n.serviceRate > b.serviceRate + 0.001) return true;
   if (n.serviceRate < b.serviceRate - 0.001) return false;
 
-  // 5. 再看 SOC 安全
+  // 4. SOC 安全
   if (n.socMinPct > b.socMinPct + 0.5) return true;
   if (n.socMinPct < b.socMinPct - 0.5) return false;
 
-  // 6. 再看可再生供能缺口
+  // 5. 可再生供能目标
   if (n.renewableShortfall < b.renewableShortfall - 0.005) return true;
   if (n.renewableShortfall > b.renewableShortfall + 0.005) return false;
 
-  // 7. 最后看经济性：优先比较 LCOE，再用 CAPEX 兜底
+  // 6. 经济性：先 LCOE，再 CAPEX
   if (n.lcoeYuanPerKwh < b.lcoeYuanPerKwh - 0.001) return true;
   if (n.lcoeYuanPerKwh > b.lcoeYuanPerKwh + 0.001) return false;
 
@@ -252,15 +349,26 @@ function chooseBaseline(params, demand) {
   let best = null;
 
   candidates.forEach((candidate) => {
-    const evaluated = evaluateCandidateAcrossMonths(candidate, params, demand);
+    const evaluated = evaluateCandidateOnBaselineWeather(
+      candidate,
+      params,
+      demand
+    );
 
     if (isBetterBaseline(evaluated, best)) {
       best = evaluated;
     }
   });
 
+  const monthlyValidation = evaluateCandidateAcrossMonths(
+    best.candidate,
+    params,
+    demand
+  );
+
   return {
     ...best,
+    monthlyValidation,
     candidateCount: candidates.length,
     annualDemandKwh: best?.score?.annualDemandKwh || 0
   };
@@ -285,8 +393,13 @@ export function runM1Plan(context) {
   const selected = chooseBaseline(params, demand);
   const hardware = selected.candidate;
   const capex = calcCapexWan(hardware, params);
-  const summary = selected.annualSummary;
-  const lcoe = calcLcoeYuanPerKwh(
+
+  const summary = selected.simulation.summary;
+  const monthlyValidation = selected.monthlyValidation || {};
+  const monthlySummary = monthlyValidation.annualSummary || {};
+  const monthEvaluations = monthlyValidation.monthEvaluations || [];
+
+  const lcoe = selected.score.lcoeYuanPerKwh ?? calcLcoeYuanPerKwh(
     capex.capexWan,
     selected.annualDemandKwh,
     0,
@@ -312,14 +425,14 @@ export function runM1Plan(context) {
       lcoeYuanPerKwh: round(lcoe, 3)
     },
     baselineMatch: {
-      annualEquivalentUnservedKwh: round(selected.score.annualEquivalentUnservedKwh, 1),
-      unservedKwh: round(selected.score.annualEquivalentUnservedKwh, 1),
-      unservedRate: round(selected.score.annualUnservedRate, 5),
+      baselineWeatherType: selected.score.baselineWeatherType,
+      baselineDemandKwh: round(selected.score.baselineDemandKwh, 1),
+      baselineUnservedKwh: round(selected.score.baselineUnservedKwh, 1),
+      baselineUnservedRate: round(selected.score.baselineUnservedRate, 5),
 
-      worstMonthIndex: selected.score.worstMonthIndex,
-      worstMonthName: selected.score.worstMonthName,
-      worstMonthUnservedKwh: round(selected.score.worstMonthUnservedKwh, 1),
-      worstMonthUnservedRate: round(selected.score.worstMonthUnservedRate, 5),
+      annualDemandKwh: round(selected.score.annualDemandKwh, 1),
+      annualEquivalentUnservedKwh: round(selected.score.annualEquivalentUnservedKwh, 1),
+      annualUnservedRate: round(selected.score.annualUnservedRate, 5),
 
       serviceRate: round(selected.score.serviceRate, 5),
       deficitHours: round(selected.score.deficitHours, 1),
@@ -333,36 +446,54 @@ export function runM1Plan(context) {
       lcoeYuanPerKwh: round(lcoe, 3)
     },
     offgridBaselineCheck: {
-      annualEquivalentUnservedKwh: round(summary.annualEquivalentUnservedKwh, 1),
-      unservedKwh: round(summary.annualEquivalentUnservedKwh, 1),
-      unservedRate: round(summary.annualUnservedRate, 5),
+      checkType: "baseline_weighted_average_weather_standard_week",
+      baselineWeatherType: selected.score.baselineWeatherType,
 
-      deficitHours: round(summary.annualDeficitHours, 1),
-      serviceRate: round(summary.serviceRate, 5),
-      socMinPct: round(summary.socMinPct, 1),
+      annualEquivalentUnservedKwh: round(selected.score.annualEquivalentUnservedKwh, 1),
+      unservedKwh: round(selected.score.baselineUnservedKwh, 1),
+      unservedRate: round(selected.score.baselineUnservedRate, 5),
 
-      worstMonthIndex: summary.worstMonthIndex,
-      worstMonthName: summary.worstMonthName,
-      worstMonthUnservedKwh: round(summary.worstMonthUnservedKwh, 1),
-      worstMonthUnservedRate: round(summary.worstMonthUnservedRate, 5),
-      worstMonthDeficitHours: round(summary.worstMonthDeficitHours, 1),
-      worstMonthSocMinPct: round(summary.worstMonthSocMinPct, 1),
+      deficitHours: round(selected.score.deficitHours, 1),
+      serviceRate: round(selected.score.serviceRate, 5),
+      socMinPct: round(selected.score.socMinPct, 1),
 
-      pvGenerationAnnualKwh: round(summary.pvGenerationKwh, 1),
-      pvDirectToLoadKwh: round(summary.pvToLoadKwh, 1),
-      batteryToLoadKwh: round(summary.batteryToLoadKwh, 1),
-      curtailmentKwh: round(summary.curtailmentKwh, 1),
-      curtailmentRatePct: round(summary.curtailmentRatePct, 2),
+      pvGenerationAnnualKwh: round(selected.score.annualEquivalentPvKwh, 1),
+      pvDirectToLoadKwh: round(annualizeWeekValue(summary.pvToLoadKwh), 1),
+      batteryToLoadKwh: round(annualizeWeekValue(summary.batteryToLoadKwh), 1),
+      curtailmentKwh: round(selected.score.annualEquivalentCurtailmentKwh, 1),
+      curtailmentRatePct: round(selected.score.curtailmentRatePct, 2),
 
-      pvSelfUseRate: round(summary.pvSelfUseRate, 5),
-      renewableSupplyRate: round(summary.renewableSupplyRate, 5),
-
-      // 兼容旧字段
-      renewableShare: round(summary.renewableSupplyRate, 5),
+      pvSelfUseRate: round(selected.score.pvSelfUseRate, 5),
+      renewableSupplyRate: round(selected.score.renewableSupplyRate, 5),
+      renewableShare: round(selected.score.renewableSupplyRate, 5),
 
       totalLoadEnergyAnnualKwh: round(selected.annualDemandKwh, 1),
+      lcoeYuanPerKwh: round(lcoe, 3)
+    },
+    monthlyAdaptationCheck: {
+      checkType: "selected_s0_monthly_weather_sensitivity",
 
-      monthlyChecks: selected.monthEvaluations.map((item) => {
+      annualEquivalentUnservedKwh: round(monthlySummary.annualEquivalentUnservedKwh, 1),
+      unservedRate: round(monthlySummary.annualUnservedRate, 5),
+      serviceRate: round(monthlySummary.serviceRate, 5),
+      deficitHours: round(monthlySummary.annualDeficitHours, 1),
+      socMinPct: round(monthlySummary.socMinPct, 1),
+
+      worstMonthIndex: monthlySummary.worstMonthIndex,
+      worstMonthName: monthlySummary.worstMonthName,
+      worstMonthUnservedKwh: round(monthlySummary.worstMonthUnservedKwh, 1),
+      worstMonthUnservedRate: round(monthlySummary.worstMonthUnservedRate, 5),
+      worstMonthDeficitHours: round(monthlySummary.worstMonthDeficitHours, 1),
+      worstMonthSocMinPct: round(monthlySummary.worstMonthSocMinPct, 1),
+
+      pvGenerationAnnualKwh: round(monthlySummary.pvGenerationKwh, 1),
+      curtailmentKwh: round(monthlySummary.curtailmentKwh, 1),
+      curtailmentRatePct: round(monthlySummary.curtailmentRatePct, 2),
+
+      pvSelfUseRate: round(monthlySummary.pvSelfUseRate, 5),
+      renewableSupplyRate: round(monthlySummary.renewableSupplyRate, 5),
+
+      monthlyChecks: monthEvaluations.map((item) => {
         const s = item.simulation.summary;
         return {
           monthIndex: item.monthIndex,
@@ -381,13 +512,13 @@ export function runM1Plan(context) {
       })
     },
     energyPerformance: {
-      renewableShare: round(summary.renewableSupplyRate, 5),
-      renewableSupplyRate: round(summary.renewableSupplyRate, 5),
-      pvSelfUseRate: round(summary.pvSelfUseRate, 5),
+      renewableShare: round(selected.score.renewableSupplyRate, 5),
+      renewableSupplyRate: round(selected.score.renewableSupplyRate, 5),
+      pvSelfUseRate: round(selected.score.pvSelfUseRate, 5),
 
-      pvGenerationAnnualKwh: round(summary.pvGenerationKwh, 1),
-      curtailmentAnnualKwh: round(summary.curtailmentKwh, 1),
-      curtailmentRatePct: round(summary.curtailmentRatePct, 2),
+      pvGenerationAnnualKwh: round(selected.score.annualEquivalentPvKwh, 1),
+      curtailmentAnnualKwh: round(selected.score.annualEquivalentCurtailmentKwh, 1),
+      curtailmentRatePct: round(selected.score.curtailmentRatePct, 2),
 
       gridBuyDailyKwh: 0,
       gridBuyAnnualKwh: 0,
@@ -409,9 +540,7 @@ export function runM1Plan(context) {
     weatherSummary: params.weatherSummary,
     chartData: {
       ...buildM1ChartData(demand, selected.simulation),
-      chartMonthIndex: selected.score.worstMonthIndex,
-      chartMonthName: selected.score.worstMonthName,
-      chartMeaning: "worst_month_typical_week"
+      chartMeaning: "baseline_weighted_average_weather_standard_week"
     },
     sourceParams: {
       climateKey: params.climateKey,

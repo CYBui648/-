@@ -98,56 +98,99 @@ function buildCompatRiskReport(scenario) {
 export function runM2ScenarioCompare(context) {
   const m1 = requireM1(context);
   const params = normalizeProjectInput(context);
-  const monthIndex = selectPressureMonth(params);
-  const days = MONTH_DAYS[monthIndex] || 30;
+
+  // M2 主体改为全年仿真；压力月只保留为诊断字段
+  const predictedPressureMonthIndex = selectPressureMonth(params);
+  const annualDays = 365;
+
   const hardware = buildHardwareFromM1(m1, params);
+
+  // D0：全年用户初始需求画像，暂不做需求侧调度
   const demand = buildDemandProfile(params, {
-    days,
-    seed: 20260513 + monthIndex,
+    days: annualDays,
+    seed: 20260513,
     pilePlan: {
       n7kw: hardware.n7kw,
       n30kw: hardware.n30kw
     }
   });
+
   const scenarios = runScenarioSet({
     hardware,
     demand,
     params,
-    monthIndex,
+    monthIndex: predictedPressureMonthIndex,
     useGTilt: Boolean(params.gTiltData?.length)
   });
+
   const comparison = buildComparison(scenarios);
 
   return {
-    contract: "M2ScenarioCompareResult",
+    contract: "M2AnnualScenarioCompareResult",
+
     summary: {
-      title: "S0 四情景运行评价已完成",
-      monthName: MONTH_NAMES[monthIndex],
-      monthIndex,
-      pressureMonthDays: days,
+      title: "S0 全年四情景运行评价已完成",
+
+      horizonType: "annual",
+      annualDays,
+      ticks: demand.loadCurve.length,
+      tickMinutes: 15,
+
+      predictedPressureMonthName: MONTH_NAMES[predictedPressureMonthIndex],
+      predictedPressureMonthIndex,
+      predictedPressureMonthDays: MONTH_DAYS[predictedPressureMonthIndex] || 30,
+
       transformerLimitKw: params.transformerLimitKw,
       usesM1Hardware: true,
       scenarioCount: SCENARIO_KEYS.length
     },
+
+    horizon: {
+      type: "annual",
+      days: annualDays,
+      ticks: demand.loadCurve.length,
+      tickMinutes: 15,
+      expectedTicks: annualDays * 96
+    },
+
     weatherSummary: {
       ...params.weatherSummary,
-      selectedMonthMethod: params.monthMode === "manual" ? "manual" : "school_pressure_score",
-      selectedMonthIndex: monthIndex,
-      selectedMonthName: MONTH_NAMES[monthIndex],
-      selectedMonthDailyHPS: params.weather?.monthlyHPS?.[monthIndex] ?? null
+
+      simulationWeatherMode: params.gTiltData?.length
+        ? "annual_native_gtilt"
+        : "annual_fallback_synthetic",
+
+      predictedPressureMonthMethod: params.monthMode === "manual"
+        ? "manual"
+        : "school_pressure_score",
+      predictedPressureMonthIndex,
+      predictedPressureMonthName: MONTH_NAMES[predictedPressureMonthIndex],
+      predictedPressureMonthDailyHPS:
+        params.weather?.monthlyHPS?.[predictedPressureMonthIndex] ?? null
     },
+
     hardwareSnapshot: hardware,
+
     demandSnapshot: {
-      totalEnergyKwh: round(demand.totalEnergyKwh, 1),
-      dailyEnergyKwh: round(demand.totalDailyKwh, 1),
+      profileKey: "D0",
+      profileLabel: "全年用户初始需求画像",
+      horizonDays: annualDays,
+      ticks: demand.loadCurve.length,
+
+      annualEnergyKwh: round(demand.totalEnergyKwh, 1),
+      averageDailyEnergyKwh: round(demand.totalEnergyKwh / annualDays, 1),
       peakLoadKw: round(demand.peakLoadKw, 1),
+
       eventCount: demand.events.length,
       queueUnmetKwh: round(demand.queueUnmetKwh, 1),
       abandonedCount: demand.abandonedCount
     },
+
     scenarios,
     comparison,
+
     riskReport: buildCompatRiskReport(scenarios.offgrid_rule),
+
     energyLedger: {
       demandEnergyKwh: scenarios.offgrid_rule.summary.demandKwh,
       deliveredEnergyKwh: scenarios.offgrid_rule.summary.deliveredKwh,
@@ -157,15 +200,21 @@ export function runM2ScenarioCompare(context) {
       gridCostYuan: scenarios.grid_rule.summary.gridCostYuan,
       curtailmentRatePct: scenarios.offgrid_rule.summary.curtailmentRatePct
     },
+
     handoffToM3: buildRiskHandoff(scenarios),
+
     chartData: scenarios.offgrid_rule.chartData,
+
     sourceParams: {
-      monthIndex,
-      monthLabel: MONTH_NAMES[monthIndex],
+      horizonType: "annual",
+      annualDays,
+      predictedPressureMonthIndex,
+      predictedPressureMonthLabel: MONTH_NAMES[predictedPressureMonthIndex],
       transformerLimitKw: params.transformerLimitKw,
       teacherRatio: params.teacherRatio,
       anxietyRatio: params.anxietyRatio
     },
+
     upstreamM1Summary: {
       pvKw: m1.hardwarePlan.pvKw,
       storageKwh: m1.hardwarePlan.storageKwh,

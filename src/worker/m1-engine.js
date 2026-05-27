@@ -283,7 +283,6 @@ export function runM1Plan(context) {
   const hardware = selected.candidate;
   const capex = calcCapexWan(hardware, params);
   const summary = selected.annualSummary;
-  const displaySummary = selected.simulation.summary;
   const lcoe = calcLcoeYuanPerKwh(
     capex.capexWan,
     selected.annualDemandKwh,

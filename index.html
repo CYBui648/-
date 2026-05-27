@@ -153,41 +153,63 @@
               <article class="info-card insight-card wide-card">
                 <div class="section-head compact-head">
                   <div>
+                    <h4>S0 生成口径</h4>
+                    <p>M1 使用标准周 EV 基准需求与 12 个月月度典型气象加权平均得到的基准气象，在离网边界下生成 S0 基础配置。12 个月逐月校验仅作为 S0 的月度适应性风险提示。</p>
+                  </div>
+                </div>
+                <div class="logic-grid">
+                  <div class="logic-pill"><span>需求口径</span><strong>标准周 EV 基准需求</strong><small>由车辆画像、快慢充偏好、SOC 目标与桩服务模拟生成</small></div>
+                  <div class="logic-pill"><span>气象口径</span><strong>加权平均月度典型气象</strong><small>12 个月典型气象按月份天数加权，不是最差月</small></div>
+                  <div class="logic-pill"><span>运行边界</span><strong>离网运行</strong><small>PV + 储能不足时记为未满足电量，不允许电网兜底</small></div>
+                  <div class="logic-pill"><span>筛选顺序</span><strong>可靠性 → SOC → 可再生供能 → LCOE</strong><small>先保证能用，再比较经济性</small></div>
+                </div>
+              </article>
+
+              <article class="info-card insight-card wide-card">
+                <div class="section-head compact-head">
+                  <div>
                     <h4>S0 离网基准核心指标</h4>
-                    <p>基于标准周需求与 12 个月典型气象校验，展示 S0 是否满足离网基准条件。</p>
+                    <p>基于"标准周需求 × 加权平均基准气象"的主筛选结果，判断 S0 是否成立。</p>
                   </div>
                 </div>
                 <div class="metric-grid" id="m1-check-kpis"></div>
               </article>
+
               <article class="info-card insight-card">
-                <h4>最差月典型周 EV 负荷与 PV</h4>
-                <p class="chart-note" id="m1-chart-note">运行 M1 后展示最差月典型周曲线。</p>
+                <h4>基准气象下标准周运行曲线</h4>
+                <p class="chart-note" id="m1-chart-note">运行 M1 后展示基准加权气象下的标准周运行曲线。</p>
                 <div class="chart-box" id="m1-power-echart"></div>
               </article>
+
               <article class="info-card insight-card">
                 <h4>快慢充占用需求</h4>
                 <div class="chart-box" id="m1-occupancy-chart"></div>
               </article>
+
               <article class="info-card insight-card">
                 <h4>投资成本构成</h4>
                 <div class="chart-box small" id="m1-capex-echart"></div>
               </article>
-              <article class="info-card insight-card">
-                <h4>12个月典型气象校验</h4>
-                <p class="chart-note">展示每个月典型周的离网缺口、最低 SOC 与弃光率。</p>
-                <div class="chart-box" id="m1-month-echart"></div>
-              </article>
+
               <article class="info-card insight-card wide-card">
                 <h4>S0 基准自洽性校验</h4>
                 <div id="m1-check-table" class="check-table"></div>
               </article>
-              <article class="info-card insight-card wide-card">
-                <h4>12个月校验明细</h4>
-                <div id="m1-month-table" class="check-table"></div>
-              </article>
+
               <article class="info-card insight-card wide-card">
                 <h4>标准周需求与桩服务结果</h4>
                 <div id="m1-demand-table" class="check-table"></div>
+              </article>
+
+              <article class="info-card insight-card">
+                <h4>S0 月度气象适应性校验</h4>
+                <p class="chart-note">S0 选定后，将同一配置放入 12 个月典型气象中复算，用于识别后续 M2/M3 需要关注的风险月份。</p>
+                <div class="chart-box" id="m1-month-echart"></div>
+              </article>
+
+              <article class="info-card insight-card wide-card">
+                <h4>12 个月校验明细</h4>
+                <div id="m1-month-table" class="check-table"></div>
               </article>
             </section>
             <pre class="result-box compact-result" id="result-m1">M1 尚未运行。</pre>

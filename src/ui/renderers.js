@@ -116,6 +116,14 @@ function barOption(labels, series, unit = "") {
   };
 }
 
+function metricCardHtml(label, value, note = "", status = "参考") {
+  return `<div class="metric-card"><span>${label}</span><strong>${value}</strong><small>${note}</small><em>${status}</em></div>`;
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function tableHtml(headers, rows) {
   return `
     <table class="data-table">
@@ -242,6 +250,7 @@ function renderM1(state) {
   const result = state.stages.m1.result;
   const el = dom.m1Summary;
   const weather = result?.weatherSummary || null;
+
   if (el.weatherStatus) {
     const status = state.input.weather?.gTiltStatus || "尚未加载 TMY CSV";
     el.weatherStatus.innerHTML = `
@@ -251,19 +260,20 @@ function renderM1(state) {
       <div><span>年均日 HPS</span><strong>${weather?.avgSolar != null ? `${n(weather.avgSolar, 2)} h/day` : "--"}</strong></div>
     `;
   }
+
   if (!result) {
     setText(el.title, "尚未生成 S0");
     setText(el.meta, "M1 输出是基准配置，不代表最终推荐方案。");
     ["pv", "storage", "pcs", "piles", "capex", "dailyKwh"].forEach((key) => setText(el[key], "--"));
-    resetChart(el.powerChart, "运行 M1 后展示基准气象典型周 EV 负荷与 PV。");
+    resetChart(el.powerChart, "运行 M1 后展示基准气象下标准周 EV 负荷、PV 与 SOC。");
     resetChart(el.occupancyChart, "运行 M1 后展示快慢充占用需求。");
     resetChart(el.capexChart, "运行 M1 后展示投资构成。");
-    resetChart(el.monthChart, "运行 M1 后展示 12 个月典型气象校验。");
-    if (el.chartNote) setText(el.chartNote, "运行 M1 后展示基准气象典型周曲线。");
+    resetChart(el.monthChart, "运行 M1 后展示 S0 的 12 个月气象适应性校验。");
+    if (el.chartNote) setText(el.chartNote, "运行 M1 后展示基准加权气象下的标准周运行曲线。");
     if (el.checkKpis) el.checkKpis.innerHTML = '<div class="empty-note">运行 M1 后展示 S0 离网基准核心指标。</div>';
-    if (el.checkTable) el.checkTable.innerHTML = '<div class="empty-note">运行 M1 后展示 S0 自洽性校验。</div>';
-    if (el.monthTable) el.monthTable.innerHTML = '<div class="empty-note">运行 M1 后展示 12 个月校验明细。</div>';
+    if (el.checkTable) el.checkTable.innerHTML = '<div class="empty-note">运行 M1 后展示 S0 基准自洽性校验。</div>';
     if (el.demandTable) el.demandTable.innerHTML = '<div class="empty-note">运行 M1 后展示标准周需求与桩服务结果。</div>';
+    if (el.monthTable) el.monthTable.innerHTML = '<div class="empty-note">运行 M1 后展示 12 个月校验明细。</div>';
     return;
   }
 
@@ -272,50 +282,53 @@ function renderM1(state) {
   const demand = result.demandProfile || {};
   const check = result.offgridBaselineCheck || {};
   const monthlyCheck = result.monthlyAdaptationCheck || {};
+  const monthly = safeArray(monthlyCheck.monthlyChecks);
   const chart = result.chartData || {};
-  const monthly = Array.isArray(monthlyCheck.monthlyChecks) ? monthlyCheck.monthlyChecks : [];
-  const lcoe = economics.lcoeYuanPerKwh ?? result.baselineMatch?.lcoeYuanPerKwh;
+  const lcoe = economics.lcoeYuanPerKwh ?? check.lcoeYuanPerKwh ?? result.baselineMatch?.lcoeYuanPerKwh;
 
-  setText(el.title, "S0 离网基准配置已生成");
-  setText(el.meta, `${result.summary?.city || "--"} · 标准周日均需求 ${n(demand.totalDailyKwh, 1)} kWh/day · 最差月 ${monthlyCheck.worstMonthName || "--"} · LCOE ${n(lcoe, 3)} 元/kWh · S0 将传递给 M2`);
-  setText(el.pv, n(plan.pvKw, 1));
-  setText(el.storage, n(plan.storageKwh, 1));
-  setText(el.pcs, n(plan.pcsKw, 1));
+  setText(el.title, result.summary?.title || "S0 离网基准配置已生成");
+  setText(el.meta, `${result.summary?.city || "--"} · 标准周日均需求 ${n(demand.totalDailyKwh, 1)} kWh/day · 基准气象 ${check.baselineWeatherType || "weighted average"} · LCOE ${n(lcoe, 3)} 元/kWh · S0 将传递给 M2`);
+  setText(el.pv, n(plan.pvKw, 0));
+  setText(el.storage, n(plan.storageKwh, 0));
+  setText(el.pcs, n(plan.pcsKw, 0));
   setText(el.piles, `${plan.n7kw || 0} / ${plan.n30kw || 0}`);
   setText(el.capex, n(economics.capexWan, 1));
   setText(el.dailyKwh, n(demand.totalDailyKwh, 1));
 
   if (el.checkKpis) {
     el.checkKpis.innerHTML = [
-      ["全年等效未满足电量", `${n(check.annualEquivalentUnservedKwh ?? check.unservedKwh, 1)} kWh`, `缺口率 ${pct(check.unservedRate || 0, 2)}`, (check.unservedRate || 0) <= 0.01 ? "通过" : "关注"],
-      ["供能满足率", pct(check.serviceRate, 2), "基准加权平均气象典型周", check.serviceRate >= 0.99 ? "通过" : "风险"],
-      ["最差月份", monthlyCheck.worstMonthName || "--", `最差月缺口 ${n(monthlyCheck.worstMonthUnservedKwh, 1)} kWh`, (monthlyCheck.worstMonthUnservedKwh || 0) <= 1 ? "通过" : "关注"],
-      ["最低 SOC", `${n(check.socMinPct, 1)}%`, `最差月最低 ${n(monthlyCheck.worstMonthSocMinPct, 1)}%`, check.socMinPct >= 8 ? "通过" : "风险"],
-      ["LCOE", `${n(lcoe, 3)} 元/kWh`, "年化投资 + 运维 / 年等效需求", "经济性"],
-      ["可再生供能占比", pct(check.renewableSupplyRate ?? check.renewableShare, 1), "PV 直接供能 + 储能供能 / 负荷", "参考"],
-      ["PV 自用率", pct(check.pvSelfUseRate, 1), "已利用 PV / PV 总发电", "参考"],
-      ["弃光率", `${n(check.curtailmentRatePct, 1)}%`, `弃光 ${n(check.curtailmentKwh, 1)} kWh`, "参考"],
-      ["年等效 PV 发电", `${n(check.pvGenerationAnnualKwh, 1)} kWh`, "12个月典型周加权", "参考"]
-    ].map(([label, value, note, status]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong><small>${note}</small><em>${status}</em></div>`).join("");
+      metricCardHtml("年等效未满足电量", `${n(check.annualEquivalentUnservedKwh, 1)} kWh`, `基准缺口率 ${pct(check.unservedRate || 0, 2)}`, (check.unservedRate || 0) <= 0.01 ? "通过" : "关注"),
+      metricCardHtml("供能满足率", pct(check.serviceRate, 2), "标准周 × 基准气象", check.serviceRate >= 0.99 ? "通过" : "风险"),
+      metricCardHtml("最低 SOC", `${n(check.socMinPct, 1)}%`, "离网运行储能安全边界", check.socMinPct >= 8 ? "通过" : "风险"),
+      metricCardHtml("LCOE", `${n(lcoe, 3)} 元/kWh`, "年化投资 + 运维 / 年等效需求", "经济性"),
+      metricCardHtml("可再生供能占比", pct(check.renewableSupplyRate ?? check.renewableShare, 1), "PV 直接供能 + 储能供能 / 负荷", "参考"),
+      metricCardHtml("PV 自用率", pct(check.pvSelfUseRate, 1), "已利用 PV / PV 总发电", "参考"),
+      metricCardHtml("弃光率", `${n(check.curtailmentRatePct, 1)}%`, `弃光 ${n(check.curtailmentKwh, 1)} kWh`, "参考"),
+      metricCardHtml("年等效 PV 发电", `${n(check.pvGenerationAnnualKwh, 1)} kWh`, "基准气象标准周年化", "参考"),
+      metricCardHtml("月度风险提示", monthlyCheck.worstMonthName || "--", `最差月缺口 ${n(monthlyCheck.worstMonthUnservedKwh, 1)} kWh`, "提示")
+    ].join("");
   }
 
   if (el.chartNote) {
-    setText(el.chartNote, `当前曲线展示 12 个月加权平均基准气象典型周。该曲线用于说明 S0 在加权平均基准气象下的离网运行状态。`);
+    setText(el.chartNote, '当前曲线展示 S0 在“标准周需求 × 加权平均基准气象”下的离网运行状态；最差月风险请看下方月度适应性校验。');
   }
 
-  renderChart(el.powerChart, lineOption([
+  renderChart(el.powerChart, chart.ev?.length ? lineOption([
     { name: "EV 负荷", data: chart.ev || [] },
     { name: "PV 出力", data: chart.pv || [] },
     { name: "SOC", data: chart.soc || [] }
-  ], "kW / %"), "运行 M1 后展示基准气象典型周 EV 负荷与 PV。");
+  ], "kW / %") : null, "运行 M1 后展示基准气象下标准周 EV 负荷、PV 与 SOC。");
 
-  renderChart(el.occupancyChart, lineOption([
+  renderChart(el.occupancyChart, (chart.fastOcc?.length || chart.slowOcc?.length) ? lineOption([
     { name: "快充占用", data: chart.fastOcc || [] },
-    { name: "慢充占用", data: chart.slowOcc || [] }
-  ], "个"), "运行 M1 后展示快慢充占用需求。");
+    { name: "慢充占用", data: chart.slowOcc || [] },
+    { name: "原始快充需求", data: chart.rawFastOcc || [] },
+    { name: "原始慢充需求", data: chart.rawSlowOcc || [] }
+  ], "端口数") : null, "运行 M1 后展示快慢充占用需求。");
 
   renderChart(el.capexChart, {
     tooltip: { trigger: "item" },
+    legend: { bottom: 0 },
     series: [{
       type: "pie",
       radius: ["42%", "70%"],
@@ -328,42 +341,22 @@ function renderM1(state) {
     }]
   }, "运行 M1 后展示投资构成。");
 
-  renderChart(el.monthChart, monthly.length ? barOption(
-    monthly.map((m) => m.monthName),
-    [
-      { name: "周缺口", data: monthly.map((m) => m.unservedKwhWeek || 0) },
-      { name: "最低 SOC", type: "line", data: monthly.map((m) => m.socMinPct || 0) },
-      { name: "弃光率", type: "line", data: monthly.map((m) => m.curtailmentRatePct || 0) }
-    ],
-    "kWh / %"
-  ) : null, "运行 M1 后展示 12 个月典型气象校验。");
-
-  el.checkTable.innerHTML = tableHtml(
-    ["指标", "结果", "说明"],
-    [
-      ["基准气象未满足电量", `${n(check.unservedKwh, 1)} kWh`, "加权平均气象典型周离网运行"],
-      ["全年等效缺口率", pct(check.unservedRate || 0, 2), "未满足电量 / 年等效总需求"],
-      ["供能满足率", pct(check.serviceRate, 2), check.serviceRate >= 0.99 ? "满足 S0 基准要求" : "存在供能风险"],
-      ["最差月份（月度校验）", monthlyCheck.worstMonthName || "--", `最差月缺口 ${n(monthlyCheck.worstMonthUnservedKwh, 1)} kWh`],
-      ["最低 SOC", `${n(check.socMinPct, 1)}%`, check.socMinPct >= 8 ? "储能安全边界可接受" : "储能存在触底风险"],
-      ["LCOE", `${n(lcoe, 3)} 元/kWh`, "满足可靠性后的经济性排序指标"],
-      ["可再生供能占比", pct(check.renewableSupplyRate ?? check.renewableShare, 1), "PV 直接供能 + 储能供能 / 负荷"],
-      ["PV 自用率", pct(check.pvSelfUseRate, 1), "已利用 PV / PV 总发电"],
-      ["弃光率", `${n(check.curtailmentRatePct, 1)}%`, "用于判断 PV 是否明显过配"],
-      ["年等效 PV 发电", `${n(check.pvGenerationAnnualKwh, 1)} kWh`, "12个月典型周加权"]
-    ]
-  );
-
-  if (el.monthTable) {
-    el.monthTable.innerHTML = monthly.length
-      ? tableHtml(
-          ["月份", "权重", "周需求", "周缺口", "缺口率", "服务率", "最低 SOC", "弃光率"],
-          monthly.map((m) => [
-            m.monthName, n(m.weight, 3), `${n(m.demandKwhWeek, 1)} kWh`, `${n(m.unservedKwhWeek, 1)} kWh`,
-            pct(m.unservedRate || 0, 2), pct(m.serviceRate, 2), `${n(m.socMinPct, 1)}%`, `${n(m.curtailmentRatePct, 1)}%`
-          ])
-        )
-      : '<div class="empty-note">暂无月度校验数据。</div>';
+  if (el.checkTable) {
+    el.checkTable.innerHTML = tableHtml(
+      ["指标", "结果", "说明"],
+      [
+        ["基准气象口径", check.baselineWeatherType || "--", "12 个月月度典型气象加权平均，不是最差月"],
+        ["年等效未满足电量", `${n(check.annualEquivalentUnservedKwh, 1)} kWh`, "基准气象标准周结果折算为年等效"],
+        ["基准缺口率", pct(check.unservedRate || 0, 2), "未满足电量 / 基准需求"],
+        ["供能满足率", pct(check.serviceRate, 2), check.serviceRate >= 0.99 ? "满足 S0 基准要求" : "存在供能风险"],
+        ["最低 SOC", `${n(check.socMinPct, 1)}%`, check.socMinPct >= 8 ? "储能安全边界可接受" : "储能存在触底风险"],
+        ["LCOE", `${n(lcoe, 3)} 元/kWh`, "满足可靠性后的经济性排序指标"],
+        ["可再生供能占比", pct(check.renewableSupplyRate ?? check.renewableShare, 1), "PV 直接供能 + 储能供能 / 负荷"],
+        ["PV 自用率", pct(check.pvSelfUseRate, 1), "已利用 PV / PV 总发电"],
+        ["弃光率", `${n(check.curtailmentRatePct, 1)}%`, "用于判断 PV 是否明显过配"],
+        ["电网购电", "0 kWh", "M1 是离网基准配置，不允许电网兜底"]
+      ]
+    );
   }
 
   if (el.demandTable) {
@@ -382,6 +375,28 @@ function renderM1(state) {
         ["慢充事件数", `${demand.slowCount || 0}`, "SLOW 事件"]
       ]
     );
+  }
+
+  renderChart(el.monthChart, monthly.length ? barOption(
+    monthly.map((m) => m.monthName),
+    [
+      { name: "周缺口", data: monthly.map((m) => m.unservedKwhWeek || 0) },
+      { name: "最低 SOC", type: "line", data: monthly.map((m) => m.socMinPct || 0) },
+      { name: "弃光率", type: "line", data: monthly.map((m) => m.curtailmentRatePct || 0) }
+    ],
+    "kWh / %"
+  ) : null, "运行 M1 后展示 S0 的 12 个月气象适应性校验。");
+
+  if (el.monthTable) {
+    el.monthTable.innerHTML = monthly.length
+      ? tableHtml(
+          ["月份", "权重", "周需求", "周缺口", "缺口率", "服务率", "最低 SOC", "弃光率"],
+          monthly.map((m) => [
+            m.monthName, n(m.weight, 3), `${n(m.demandKwhWeek, 1)} kWh`, `${n(m.unservedKwhWeek, 1)} kWh`,
+            pct(m.unservedRate || 0, 2), pct(m.serviceRate, 2), `${n(m.socMinPct, 1)}%`, `${n(m.curtailmentRatePct, 1)}%`
+          ])
+        )
+      : '<div class="empty-note">暂无月度适应性校验数据。</div>';
   }
 }
 

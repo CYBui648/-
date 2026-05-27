@@ -82,8 +82,12 @@ export function normalizeProjectInput(context = {}) {
   const m1 = input.m1 || {};
   const m2 = input.m2 || {};
   const m3 = input.m3 || {};
+  const weatherInput = input.weather || {};
   const climate = CITY_CLIMATE_DATA[m1.climateKey] || CITY_CLIMATE_DATA.guangzhou;
-  const fittedWeather = buildWeatherScenarioFromGTilt(m2.gTiltData, climate) || null;
+  const gTiltData = Array.isArray(weatherInput.gTiltData)
+    ? weatherInput.gTiltData
+    : (Array.isArray(m2.gTiltData) ? m2.gTiltData : null);
+  const fittedWeather = buildWeatherScenarioFromGTilt(gTiltData, climate) || null;
   const weather = fittedWeather || climate;
 
   return {
@@ -115,7 +119,7 @@ export function normalizeProjectInput(context = {}) {
     transformerLimitKw: safeNumber(m2.transformerLimitKw, 500),
     monthMode: m2.monthMode || "auto",
     monthIndex: clamp(Math.trunc(safeNumber(m2.monthIndex, 0)), 0, 11),
-    gTiltData: Array.isArray(m2.gTiltData) ? m2.gTiltData : null,
+    gTiltData,
     priceShiftThreshold: clamp(safeNumber(m3.priceShiftThreshold, 0.55), 0, 1),
     opexRate: clamp(safeNumber(m3.opexRate, 0.015), 0, 0.2)
   };
@@ -395,21 +399,74 @@ export function selectPressureMonth(params) {
   return bestIndex;
 }
 
-export function buildIrradianceSeries(params, ticks, { monthIndex = 0, useGTilt = false } = {}) {
-  if (useGTilt && params.gTiltData?.length >= 8760) {
-    let startHour = 0;
-    for (let month = 0; month < monthIndex; month++) startHour += MONTH_DAYS[month] * 24;
+export function buildIrradianceSeries(
+  params,
+  ticks,
+  {
+    monthIndex = 0,
+    useGTilt = false,
+    annualMode = false
+  } = {}
+) {
+  /**
+   * M2 年度模式：
+   * 使用原生 8760 小时 G_tilt，从全年第 0 小时开始展开。
+   * 每个小时值复制为 4 个 15 分钟点，保证小时能量守恒。
+   */
+  if (annualMode && useGTilt && params.gTiltData?.length >= 8760) {
     return Array.from({ length: ticks }, (_, tick) => {
-      const hourIndex = startHour + Math.floor(tick / 4);
+      const hourIndex = Math.min(
+        params.gTiltData.length - 1,
+        Math.floor(tick / 4)
+      );
+
       const current = safeNumber(params.gTiltData[hourIndex], 0);
-      const next = safeNumber(params.gTiltData[Math.min(params.gTiltData.length - 1, hourIndex + 1)], current);
-      return (current + (next - current) * ((tick % 4) / 4)) / 1000;
+
+      // gTiltData 单位通常是 W/m²，这里转成 kW/m²
+      return Math.max(0, current) / 1000;
     });
   }
 
-  const monthShape = params.weather?.monthlyPvShape96?.[monthIndex] ||
-    scaleShapeToDailyHps(buildBasePvShape96(), params.weather?.monthlyHPS?.[monthIndex] || params.climate?.monthlyHPS?.[monthIndex] || 3.5);
-  return Array.from({ length: ticks }, (_, tick) => monthShape[tick % TICKS_PER_DAY] || 0);
+  /**
+   * 非年度模式：
+   * 保留旧逻辑，用于 M1/M3 或其他典型月/压力月兼容场景。
+   */
+  if (useGTilt && params.gTiltData?.length >= 8760) {
+    let startHour = 0;
+    for (let month = 0; month < monthIndex; month++) {
+      startHour += MONTH_DAYS[month] * 24;
+    }
+
+    return Array.from({ length: ticks }, (_, tick) => {
+      const hourIndex = Math.min(
+        params.gTiltData.length - 1,
+        startHour + Math.floor(tick / 4)
+      );
+
+      const current = safeNumber(params.gTiltData[hourIndex], 0);
+
+      // 典型月/压力月模式也改为分段常值，保证小时能量守恒
+      return Math.max(0, current) / 1000;
+    });
+  }
+
+  /**
+   * 没有原生 G_tilt 时：
+   * fallback 到月度典型 96 点曲线。
+   */
+  const monthShape =
+    params.weather?.monthlyPvShape96?.[monthIndex] ||
+    scaleShapeToDailyHps(
+      buildBasePvShape96(),
+      params.weather?.monthlyHPS?.[monthIndex] ||
+        params.climate?.monthlyHPS?.[monthIndex] ||
+        3.5
+    );
+
+  return Array.from(
+    { length: ticks },
+    (_, tick) => monthShape[tick % TICKS_PER_DAY] || 0
+  );
 }
 
 export function simulateEnergyScenario({ hardware, loadCurve, irradiance, params, scenarioKey }) {
@@ -570,12 +627,32 @@ export function simulateEnergyScenario({ hardware, loadCurve, irradiance, params
   };
 }
 
-export function runScenarioSet({ hardware, demand, params, monthIndex = 0, useGTilt = false }) {
-  const irradiance = buildIrradianceSeries(params, demand.loadCurve.length, { monthIndex, useGTilt });
-  return Object.fromEntries(SCENARIO_KEYS.map((key) => [
-    key,
-    simulateEnergyScenario({ hardware, loadCurve: demand.loadCurve, irradiance, params, scenarioKey: key })
-  ]));
+export function runScenarioSet({
+  hardware,
+  demand,
+  params,
+  monthIndex = 0,
+  useGTilt = false,
+  annualMode = false
+}) {
+  const irradiance = buildIrradianceSeries(params, demand.loadCurve.length, {
+    monthIndex,
+    useGTilt,
+    annualMode
+  });
+
+  return Object.fromEntries(
+    SCENARIO_KEYS.map((key) => [
+      key,
+      simulateEnergyScenario({
+        hardware,
+        loadCurve: demand.loadCurve,
+        irradiance,
+        params,
+        scenarioKey: key
+      })
+    ])
+  );
 }
 
 export function buildHardwarePlan({ pvKw, storageKwh, pcsKw, n7kw, n30kw, transformerLimitKw }) {

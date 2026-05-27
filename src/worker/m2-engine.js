@@ -120,7 +120,8 @@ export function runM2ScenarioCompare(context) {
     demand,
     params,
     monthIndex: predictedPressureMonthIndex,
-    useGTilt: Boolean(params.gTiltData?.length)
+    useGTilt: Boolean(params.gTiltData?.length),
+    annualMode: true
   });
 
   const comparison = buildComparison(scenarios);

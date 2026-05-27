@@ -116,6 +116,16 @@
               </div>
             </article>
 
+            <article class="info-card input-card">
+              <h4>8760 TMY 气象数据</h4>
+              <p>M1 会用 G_tilt 拟合月度典型气象与 96 点 PV 曲线，M2/M3 会继续复用同一份原生数据做压力月仿真。</p>
+              <div class="file-line">
+                <input type="file" id="m1-csv-file" accept=".csv,.txt" />
+                <span id="m1-csv-status">尚未加载 TMY CSV</span>
+              </div>
+              <div class="weather-status-grid" id="m1-weather-status"></div>
+            </article>
+
             <article class="info-card flow-card">
               <h4>M1 计算口径</h4>
               <div class="flow-steps">
@@ -140,10 +150,45 @@
             </div>
 
             <section class="insight-grid">
-              <article class="info-card insight-card"><h4>标准周 EV 负荷与 PV</h4><div class="chart-box" id="m1-power-echart"></div></article>
-              <article class="info-card insight-card"><h4>快慢充占用需求</h4><div class="chart-box" id="m1-occupancy-chart"></div></article>
-              <article class="info-card insight-card"><h4>投资成本构成</h4><div class="chart-box small" id="m1-capex-echart"></div></article>
-              <article class="info-card insight-card"><h4>S0 基准自洽性校验</h4><div id="m1-check-table" class="check-table"></div></article>
+              <article class="info-card insight-card wide-card">
+                <div class="section-head compact-head">
+                  <div>
+                    <h4>S0 离网基准核心指标</h4>
+                    <p>基于标准周需求与 12 个月典型气象校验，展示 S0 是否满足离网基准条件。</p>
+                  </div>
+                </div>
+                <div class="metric-grid" id="m1-check-kpis"></div>
+              </article>
+              <article class="info-card insight-card">
+                <h4>最差月典型周 EV 负荷与 PV</h4>
+                <p class="chart-note" id="m1-chart-note">运行 M1 后展示最差月典型周曲线。</p>
+                <div class="chart-box" id="m1-power-echart"></div>
+              </article>
+              <article class="info-card insight-card">
+                <h4>快慢充占用需求</h4>
+                <div class="chart-box" id="m1-occupancy-chart"></div>
+              </article>
+              <article class="info-card insight-card">
+                <h4>投资成本构成</h4>
+                <div class="chart-box small" id="m1-capex-echart"></div>
+              </article>
+              <article class="info-card insight-card">
+                <h4>12个月典型气象校验</h4>
+                <p class="chart-note">展示每个月典型周的离网缺口、最低 SOC 与弃光率。</p>
+                <div class="chart-box" id="m1-month-echart"></div>
+              </article>
+              <article class="info-card insight-card wide-card">
+                <h4>S0 基准自洽性校验</h4>
+                <div id="m1-check-table" class="check-table"></div>
+              </article>
+              <article class="info-card insight-card wide-card">
+                <h4>12个月校验明细</h4>
+                <div id="m1-month-table" class="check-table"></div>
+              </article>
+              <article class="info-card insight-card wide-card">
+                <h4>标准周需求与桩服务结果</h4>
+                <div id="m1-demand-table" class="check-table"></div>
+              </article>
             </section>
             <pre class="result-box compact-result" id="result-m1">M1 尚未运行。</pre>
           </section>
@@ -170,10 +215,6 @@
                 <label>变压器容量<input type="number" data-m2-input="transformerLimitKw" min="100" max="3000" step="50"></label>
                 <label>教师车比例<input type="number" data-m2-input="teacherRatio" min="0.30" max="0.95" step="0.05"></label>
                 <label>焦虑充电比例<input type="number" data-m2-input="anxietyRatio" min="0" max="1" step="0.05"></label>
-              </div>
-              <div class="file-line">
-                <input type="file" id="m2-csv-file" accept=".csv,.txt" />
-                <span id="m2-csv-status">尚未加载 TMY CSV</span>
               </div>
             </article>
             <article class="info-card">

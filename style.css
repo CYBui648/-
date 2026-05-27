@@ -530,7 +530,8 @@ button { cursor: pointer; }
   gap: 10px;
 }
 
-.readonly-strip div {
+.readonly-strip div,
+.weather-status-grid div {
   display: grid;
   gap: 6px;
   padding: 14px;
@@ -539,9 +540,26 @@ button { cursor: pointer; }
   background: var(--panel-soft);
 }
 
+.weather-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .readonly-strip strong {
   font-family: var(--mono);
   font-size: 16px;
+}
+
+.weather-status-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.weather-status-grid strong {
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .scenario-matrix {
@@ -692,8 +710,91 @@ button { cursor: pointer; }
   .scenario-metrics,
   .flow-steps,
   .flow-steps.wide,
+  .weather-status-grid,
   .readonly-strip,
   .report-kpis {
     grid-template-columns: 1fr;
   }
+}
+
+.wide-card {
+  grid-column: 1 / -1;
+}
+
+.compact-head {
+  margin-bottom: 12px;
+}
+
+.compact-head h4 {
+  margin: 0 0 4px;
+}
+
+.compact-head p,
+.chart-note {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.metric-card {
+  position: relative;
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+}
+
+.metric-card span {
+  display: block;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.metric-card strong {
+  display: block;
+  color: #0f172a;
+  font-size: 21px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.metric-card small {
+  display: block;
+  min-height: 18px;
+  margin-top: 7px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.metric-card em {
+  display: inline-flex;
+  margin-top: 9px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.check-table {
+  overflow-x: auto;
+}
+
+.empty-note {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px dashed rgba(148, 163, 184, 0.45);
+  color: #64748b;
+  background: rgba(248, 250, 252, 0.8);
 }

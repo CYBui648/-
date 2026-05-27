@@ -239,7 +239,10 @@ function isBetterBaseline(next, best) {
   if (n.renewableShortfall < b.renewableShortfall - 0.005) return true;
   if (n.renewableShortfall > b.renewableShortfall + 0.005) return false;
 
-  // 7. 最后才看成本
+  // 7. 最后看经济性：优先比较 LCOE，再用 CAPEX 兜底
+  if (n.lcoeYuanPerKwh < b.lcoeYuanPerKwh - 0.001) return true;
+  if (n.lcoeYuanPerKwh > b.lcoeYuanPerKwh + 0.001) return false;
+
   return n.capexWan < b.capexWan;
 }
 

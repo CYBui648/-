@@ -34,8 +34,8 @@ export const dom = {
   m1Inputs: [...document.querySelectorAll("[data-m1-input]")],
   m2Inputs: [...document.querySelectorAll("[data-m2-input]")],
   m3Inputs: [...document.querySelectorAll("[data-m3-input]")],
-  m2CsvFile: document.getElementById("m2-csv-file"),
-  m2CsvStatus: document.getElementById("m2-csv-status"),
+  weatherCsvFile: document.getElementById("m1-csv-file"),
+  weatherCsvStatus: document.getElementById("m1-csv-status"),
   m1Summary: {
     title: document.getElementById("m1-summary-title"),
     meta: document.getElementById("m1-summary-meta"),
@@ -48,7 +48,13 @@ export const dom = {
     capexChart: document.getElementById("m1-capex-echart"),
     powerChart: document.getElementById("m1-power-echart"),
     occupancyChart: document.getElementById("m1-occupancy-chart"),
-    checkTable: document.getElementById("m1-check-table")
+    checkTable: document.getElementById("m1-check-table"),
+    weatherStatus: document.getElementById("m1-weather-status"),
+    checkKpis: document.getElementById("m1-check-kpis"),
+    chartNote: document.getElementById("m1-chart-note"),
+    monthChart: document.getElementById("m1-month-echart"),
+    monthTable: document.getElementById("m1-month-table"),
+    demandTable: document.getElementById("m1-demand-table")
   },
   m2Summary: {
     title: document.getElementById("m2-summary-title"),

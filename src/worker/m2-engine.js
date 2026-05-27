@@ -140,6 +140,11 @@ export function runM2ScenarioCompare(context) {
       predictedPressureMonthIndex,
       predictedPressureMonthDays: MONTH_DAYS[predictedPressureMonthIndex] || 30,
 
+      // 兼容旧版 UI：后续 M2 UI 重构时删除
+      monthName: "全年",
+      monthIndex: predictedPressureMonthIndex,
+      pressureMonthDays: annualDays,
+
       transformerLimitKw: params.transformerLimitKw,
       usesM1Hardware: true,
       scenarioCount: SCENARIO_KEYS.length
@@ -166,6 +171,15 @@ export function runM2ScenarioCompare(context) {
       predictedPressureMonthIndex,
       predictedPressureMonthName: MONTH_NAMES[predictedPressureMonthIndex],
       predictedPressureMonthDailyHPS:
+        params.weather?.monthlyHPS?.[predictedPressureMonthIndex] ?? null,
+
+      // 兼容旧版 UI：后续 M2 UI 重构时删除
+      selectedMonthMethod: params.monthMode === "manual"
+        ? "manual"
+        : "school_pressure_score",
+      selectedMonthIndex: predictedPressureMonthIndex,
+      selectedMonthName: MONTH_NAMES[predictedPressureMonthIndex],
+      selectedMonthDailyHPS:
         params.weather?.monthlyHPS?.[predictedPressureMonthIndex] ?? null
     },
 

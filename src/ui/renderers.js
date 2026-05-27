@@ -9,6 +9,8 @@ const SCENARIOS = [
 ];
 
 const chartInstances = new WeakMap();
+const chartResizeObservers = new WeakMap();
+const liveCharts = new Set();
 
 function n(value, digits = 1) {
   const number = Number(value);
@@ -70,49 +72,114 @@ function stageButtonText(key, status) {
 
 function resetChart(container, message = "暂无数据") {
   if (!container) return;
+
+  const oldObserver = chartResizeObservers.get(container);
+  if (oldObserver) {
+    oldObserver.disconnect();
+    chartResizeObservers.delete(container);
+  }
+
   const chart = chartInstances.get(container);
-  if (chart) chart.dispose();
+  if (chart) {
+    liveCharts.delete(chart);
+    chart.dispose();
+  }
+
   chartInstances.delete(container);
   container.innerHTML = `<div class="insight-chart-empty">${message}</div>`;
 }
 
 function renderChart(container, option, emptyMessage) {
   if (!container) return;
+
   if (!window.echarts) {
     resetChart(container, "图表库未加载，数据表仍可查看。");
     return;
   }
+
   if (!option) {
     resetChart(container, emptyMessage);
     return;
   }
-  container.innerHTML = "";
+
+  const oldObserver = chartResizeObservers.get(container);
+  if (oldObserver) {
+    oldObserver.disconnect();
+    chartResizeObservers.delete(container);
+  }
+
   const oldChart = chartInstances.get(container);
-  if (oldChart) oldChart.dispose();
+  if (oldChart) {
+    liveCharts.delete(oldChart);
+    oldChart.dispose();
+  }
+
+  container.innerHTML = "";
+
   const chart = window.echarts.init(container);
-  chart.setOption(option);
+  chart.setOption(option, true);
+
   chartInstances.set(container, chart);
+  liveCharts.add(chart);
+
+  if (window.ResizeObserver) {
+    const observer = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => chart.resize());
+    });
+    observer.observe(container);
+    chartResizeObservers.set(container, observer);
+  }
+
+  window.requestAnimationFrame(() => chart.resize());
 }
 
 function lineOption(series, unit = "") {
+  const xData = series[0]?.data?.map((_, i) => i + 1) || [];
+
   return {
-    grid: { left: 42, right: 24, top: 28, bottom: 32 },
+    animation: false,
+    grid: { left: 54, right: 28, top: 54, bottom: 72 },
     tooltip: { trigger: "axis" },
-    legend: { top: 0 },
-    xAxis: { type: "category", data: series[0]?.data?.map((_, i) => i + 1) || [] },
-    yAxis: { type: "value", name: unit },
-    series: series.map((item) => ({ type: "line", showSymbol: false, smooth: true, ...item }))
+    legend: { top: 4, type: "scroll" },
+    toolbox: {
+      right: 10, top: 4,
+      feature: { dataZoom: { yAxisIndex: "none" }, restore: {}, saveAsImage: {} }
+    },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, filterMode: "none" },
+      { type: "slider", xAxisIndex: 0, height: 22, bottom: 24, filterMode: "none" }
+    ],
+    xAxis: { type: "category", boundaryGap: false, data: xData },
+    yAxis: { type: "value", name: unit, scale: true },
+    series: series.map((item) => ({
+      type: "line", showSymbol: false, smooth: true, sampling: "lttb", ...item
+    }))
   };
 }
 
 function barOption(labels, series, unit = "") {
   return {
-    grid: { left: 48, right: 22, top: 34, bottom: 42 },
+    animation: false,
+    grid: { left: 54, right: 28, top: 54, bottom: 72 },
     tooltip: { trigger: "axis" },
-    legend: { top: 0 },
+    legend: { top: 4, type: "scroll" },
+    toolbox: {
+      right: 10, top: 4,
+      feature: { dataZoom: { yAxisIndex: "none" }, restore: {}, saveAsImage: {} }
+    },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, filterMode: "none" },
+      { type: "slider", xAxisIndex: 0, height: 22, bottom: 24, filterMode: "none" }
+    ],
     xAxis: { type: "category", data: labels },
-    yAxis: { type: "value", name: unit },
-    series: series.map((item) => ({ type: "bar", barMaxWidth: 32, ...item }))
+    yAxis: { type: "value", name: unit, scale: true },
+    series: series.map((item) => ({
+      type: item.type || "bar",
+      barMaxWidth: 32,
+      smooth: item.type === "line",
+      showSymbol: item.type === "line" ? false : undefined,
+      ...item
+    }))
   };
 }
 
@@ -611,3 +678,7 @@ export function renderApp(state) {
   renderM3(state);
   renderJsonResults(state);
 }
+
+window.addEventListener("resize", () => {
+  liveCharts.forEach((chart) => chart.resize());
+});

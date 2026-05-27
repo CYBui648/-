@@ -833,3 +833,64 @@ button { cursor: pointer; }
   font-size: 12px;
   line-height: 1.45;
 }
+
+/* ===== M1 图表排版优化 ===== */
+
+.insight-grid {
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+.insight-card {
+  min-width: 0;
+}
+
+.insight-card.wide-card {
+  grid-column: 1 / -1;
+}
+
+.chart-box {
+  width: 100%;
+  min-height: 420px;
+  height: 46vh;
+  max-height: 560px;
+}
+
+.chart-box.small {
+  min-height: 340px;
+  height: 36vh;
+  max-height: 460px;
+}
+
+.metric-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.check-table,
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+@media (min-width: 1280px) {
+  .stage-panel[data-panel="m1"] .insight-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .chart-box {
+    min-height: 320px;
+    height: 56vh;
+  }
+
+  .chart-box.small {
+    min-height: 280px;
+    height: 44vh;
+  }
+
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+}
